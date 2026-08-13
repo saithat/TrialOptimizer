@@ -36,12 +36,6 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
-function setSyncState(status, text) {
-  const element = $("#syncState");
-  element.className = `sync-state ${status}`;
-  element.querySelector("span:last-child").textContent = text;
-}
-
 async function request(path, options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -321,6 +315,109 @@ function renderInactivePrograms(items) {
     .join("");
 }
 
+function renderLLMCitations(citationIds, llm) {
+  const index = llm.citation_index || {};
+  return (citationIds || [])
+    .map((citationId) => {
+      const citation = index[citationId];
+      if (!citation) return "";
+      const label = citation.label || citationId;
+      const url = safeUrl(citation.url);
+      if (!url) {
+        return `<span title="${escapeHtml(citation.source || "Evidence source")}">${escapeHtml(label)}</span>`;
+      }
+      return `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(citation.source || "Evidence source")}">${escapeHtml(label)} <span>↗</span></a>`;
+    })
+    .filter(Boolean)
+    .join("");
+}
+
+function renderLLMClaims(items, llm, emptyMessage) {
+  if (!items?.length) return `<div class="llm-empty">${escapeHtml(emptyMessage)}</div>`;
+  return items
+    .map(
+      (item) => `
+        <article class="llm-claim">
+          <span class="inference-tag ${escapeHtml(item.evidence_kind)}">${escapeHtml(humanize(item.evidence_kind))}</span>
+          <p>${escapeHtml(item.statement)}</p>
+          <div class="llm-citations">${renderLLMCitations(item.citation_ids, llm)}</div>
+        </article>`,
+    )
+    .join("");
+}
+
+function renderLLMSynthesis(llm) {
+  if (!llm || llm.status === "disabled") {
+    return `
+      <section class="llm-fallback">
+        <span aria-hidden="true">✦</span>
+        <div><strong>AI evidence synthesis is not configured</strong><p>The deterministic benchmark and source citations remain available.</p></div>
+      </section>`;
+  }
+  if (llm.status !== "enhanced" || !llm.output) {
+    return `
+      <section class="llm-fallback warning">
+        <span aria-hidden="true">!</span>
+        <div><strong>AI synthesis fell back safely</strong><p>${escapeHtml(llm.message || "The deterministic benchmark remains available.")}</p></div>
+      </section>`;
+  }
+
+  const output = llm.output;
+  const alternatives = (output.alternative_designs || [])
+    .map(
+      (item) => `
+        <article class="alternative-card">
+          <h5>${escapeHtml(item.title)}</h5>
+          <p><strong>Change</strong>${escapeHtml(item.change)}</p>
+          <p><strong>Why</strong>${escapeHtml(item.rationale)}</p>
+          <p><strong>Tradeoff</strong>${escapeHtml(item.tradeoff)}</p>
+          <div class="llm-citations">${renderLLMCitations(item.citation_ids, llm)}</div>
+        </article>`,
+    )
+    .join("");
+  const gaps = (output.evidence_gaps || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const questions = (output.expert_review_questions || [])
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("");
+
+  return `
+    <section class="llm-synthesis">
+      <header class="llm-header">
+        <div>
+          <p class="section-label">AI evidence synthesis</p>
+          <h4>Interpretation and design tradeoffs</h4>
+        </div>
+        <div class="llm-meta">
+          <span class="llm-confidence ${escapeHtml(output.confidence)}">${escapeHtml(humanize(output.confidence))} confidence</span>
+          <small>${escapeHtml(llm.model)}</small>
+        </div>
+      </header>
+      <p class="llm-summary">${escapeHtml(output.executive_summary)}</p>
+      <div class="llm-columns">
+        <section>
+          <h5>Design assessment</h5>
+          <div class="llm-claim-list">${renderLLMClaims(output.design_assessment, llm, "No additional design claims were supported.")}</div>
+        </section>
+        <section>
+          <h5>Failure readthrough</h5>
+          <div class="llm-claim-list">${renderLLMClaims(output.failure_readthrough, llm, "No reviewed failure evidence was available for readthrough.")}</div>
+        </section>
+      </div>
+      <div class="alternative-group">
+        <h5>Evidence-grounded alternatives</h5>
+        <div class="alternative-grid">${alternatives || `<div class="llm-empty">No evidence-grounded alternative was proposed.</div>`}</div>
+      </div>
+      <div class="llm-review-grid">
+        <section><h5>Evidence gaps</h5><ul>${gaps || "<li>No additional gap identified.</li>"}</ul></section>
+        <section><h5>Questions for expert review</h5><ul>${questions || "<li>No additional question generated.</li>"}</ul></section>
+      </div>
+      <footer class="llm-footer">
+        <span>${llm.included_convoke_context ? "Convoke context included" : "Convoke context excluded from the model request"}</span>
+        <span>${llm.audit_status === "stored" ? "Audit record stored" : "Audit record unavailable"}</span>
+      </footer>
+    </section>`;
+}
+
 function renderRecommendation(data) {
   const recommendation = data.recommendation;
   const sample = recommendation.sample_size_benchmark;
@@ -387,6 +484,7 @@ function renderRecommendation(data) {
         <ul class="risk-list">${riskMarkup}</ul>
       </section>
     </div>
+    ${renderLLMSynthesis(data.llm)}
     <section class="evidence-section">
       <div class="evidence-heading"><div><p class="section-label">Cited analog evidence</p><h4>Reviewed outcomes</h4></div><span>Human-reviewed labels only</span></div>
       <div class="evidence-columns">
@@ -507,7 +605,6 @@ async function loadTrials() {
 }
 
 async function loadDashboard() {
-  setSyncState("", "Connecting");
   $("#setupCard").classList.add("hidden");
   try {
     const [overview, trials, analogs, sources] = await Promise.all([
@@ -523,9 +620,7 @@ async function loadDashboard() {
     renderTrials(trials);
     renderAnalogs(analogs);
     renderSources(sources);
-    setSyncState("ready", "Evidence current");
   } catch (error) {
-    setSyncState("error", "Database unavailable");
     $("#setupCard").classList.remove("hidden");
     $("#trialRows").innerHTML = `<tr class="loading-row"><td colspan="6">${escapeHtml(error.message)}</td></tr>`;
   }

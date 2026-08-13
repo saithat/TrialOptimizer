@@ -28,6 +28,8 @@ itself.
   discontinued programs plus their linked trials.
 - A Bright Data snapshot downloader/importer for public pages that lack a stable first-party API.
 - A browser dashboard with trial search and an evidence-linked trial design recommender.
+- An optional OpenAI synthesis layer that interprets the deterministic benchmark through a strict
+  schema, validates every returned citation ID, falls back safely, and stores an audit record.
 - Source and outcome-taxonomy guidance in [`docs/`](docs/).
 
 ## Quick start
@@ -45,6 +47,13 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000), then enter a drug and disea
 trial**. The generated brief benchmarks allocation, masking, comparator, enrollment, and primary
 endpoints. It cites reviewed successful and failed analogs separately from active trials,
 registry-completed trials, and inactive or discontinued programs.
+
+When `OPENAI_API_KEY` is configured, the same request also produces an AI evidence synthesis. The
+model cannot replace the deterministic design fields or outcome labels: it receives a bounded
+evidence package, must use supplied citation IDs, and falls back to the deterministic response if
+the provider call or citation validation fails. Each attempt is recorded in
+`llm_recommendation_run` with its model, prompt version, evidence snapshot, structured response,
+token usage, and status.
 
 Search and ingest a bounded set of records:
 
@@ -111,8 +120,16 @@ provenance.
 
 Copy `.env.example` to `.env`. The CLI and web app load it automatically. `DATABASE_URL` is the
 only required setting. `BRIGHT_DATA_API_TOKEN` is required only for direct Bright Data snapshot
-downloads. `CONVOKE_SNAPSHOT_DIR`, `TRIALOPT_HOST`, and `TRIALOPT_PORT` are optional local workflow
+downloads. `OPENAI_API_KEY` enables the optional LLM synthesis; the model, reasoning effort,
+timeout, retry count, and output-token limit are configurable. Retries default to zero so the UI
+falls back within the configured timeout instead of silently multiplying latency. Convoke-derived
+records are excluded from the OpenAI request by default—set
+`OPENAI_INCLUDE_CONVOKE_CONTEXT=true` only after confirming that this external processing is
+permitted. `CONVOKE_SNAPSHOT_DIR`, `TRIALOPT_HOST`, and `TRIALOPT_PORT` are optional local workflow
 settings; Convoke MCP itself does not require an app-managed API key.
+
+The example defaults to `gpt-5.4`, which is available to the project used during implementation.
+Set `OPENAI_MODEL` to another model only when the configured OpenAI project has access to it.
 
 ## Architecture notes
 

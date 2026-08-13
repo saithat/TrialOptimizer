@@ -65,7 +65,11 @@ def test_dashboard_and_health() -> None:
     page = client.get("/")
     assert page.status_code == 200
     assert 'id="designForm"' in page.text
-    assert client.get("/health").json() == {"status": "ok", "database": "ready"}
+    assert client.get("/health").json() == {
+        "status": "ok",
+        "database": "ready",
+        "llm": "disabled",
+    }
 
 
 def test_dashboard_api_and_not_found() -> None:

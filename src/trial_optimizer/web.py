@@ -11,11 +11,19 @@ from typing import Any, Protocol
 import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from openai import OpenAIError
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from trial_optimizer.llm import (
+    CitationValidationError,
+    RecommendationEnhancer,
+    build_enhancer_from_environment,
+)
 from trial_optimizer.normalization import normalize_name
 
 DEFAULT_DATABASE_URL = "postgresql://trialopt:trialopt@localhost:5432/trialopt"
@@ -98,6 +106,8 @@ class DashboardStore(Protocol):
     def sources(self) -> list[dict[str, Any]]: ...
 
     def recommend_trial_design(self, request: TrialDesignInput) -> dict[str, Any]: ...
+
+    def record_recommendation_run(self, record: dict[str, Any]) -> None: ...
 
     def is_ready(self) -> bool: ...
 
@@ -835,11 +845,59 @@ class PostgresDashboardStore:
             ],
         }
 
+    def record_recommendation_run(self, record: dict[str, Any]) -> None:
+        llm = record["llm"]
+        usage = llm.get("usage", {})
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO llm_recommendation_run (
+                    request_payload, evidence_snapshot, deterministic_recommendation,
+                    llm_output, provider, model, prompt_version, status,
+                    provider_response_id, included_convoke_context,
+                    input_tokens, output_tokens, total_tokens, error_category
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    Jsonb(record["request"]),
+                    Jsonb(record["evidence"]),
+                    Jsonb(record["deterministic_recommendation"]),
+                    (
+                        Jsonb(
+                            {
+                                "structured_output": llm["output"],
+                                "citation_index": llm.get("citation_index", {}),
+                            }
+                        )
+                        if llm.get("output") is not None
+                        else None
+                    ),
+                    llm.get("provider", "openai"),
+                    llm["model"],
+                    llm["prompt_version"],
+                    llm["status"],
+                    llm.get("provider_response_id"),
+                    bool(llm.get("included_convoke_context", False)),
+                    usage.get("input_tokens"),
+                    usage.get("output_tokens"),
+                    usage.get("total_tokens"),
+                    llm.get("error_category"),
+                ),
+            )
 
-def create_app(store: DashboardStore | None = None) -> FastAPI:
+
+def create_app(
+    store: DashboardStore | None = None,
+    enhancer: RecommendationEnhancer | None = None,
+) -> FastAPI:
     data_store = store or PostgresDashboardStore()
     api = FastAPI(title="Trial Optimizer", version="0.1.0")
     api.state.store = data_store
+    api.state.enhancer = enhancer
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def run_query(method_name: str, *args: Any, **kwargs: Any) -> Any:
@@ -858,7 +916,11 @@ def create_app(store: DashboardStore | None = None) -> FastAPI:
 
     @api.get("/health")
     def health() -> dict[str, Any]:
-        return {"status": "ok", "database": "ready" if data_store.is_ready() else "unavailable"}
+        return {
+            "status": "ok",
+            "database": "ready" if data_store.is_ready() else "unavailable",
+            "llm": "ready" if enhancer is not None else "disabled",
+        }
 
     @api.get("/api/overview")
     def overview() -> dict[str, Any]:
@@ -890,9 +952,55 @@ def create_app(store: DashboardStore | None = None) -> FastAPI:
 
     @api.post("/api/recommendations")
     def recommendation(request: TrialDesignInput) -> dict[str, Any]:
-        return run_query("recommend_trial_design", request)
+        result = run_query("recommend_trial_design", request)
+        if enhancer is None:
+            result["llm"] = {
+                "status": "disabled",
+                "message": "LLM synthesis is not configured; the deterministic benchmark is still available.",
+            }
+            return result
+
+        try:
+            llm_result = enhancer.enhance(result)
+        except (OpenAIError, ValueError) as error:
+            status = (
+                "validation_failed" if isinstance(error, CitationValidationError) else "fallback"
+            )
+            llm_result = {
+                "status": status,
+                "provider": "openai",
+                "model": enhancer.model,
+                "prompt_version": enhancer.prompt_version,
+                "provider_response_id": None,
+                "generated_at": datetime.now(UTC),
+                "included_convoke_context": enhancer.include_convoke_context,
+                "citation_index": {},
+                "output": None,
+                "usage": {},
+                "error_category": type(error).__name__,
+                "message": "The LLM synthesis was unavailable; the deterministic benchmark remains valid.",
+            }
+        result["llm"] = llm_result
+
+        record_method = getattr(data_store, "record_recommendation_run", None)
+        if record_method is not None:
+            try:
+                record_method(
+                    jsonable_encoder(
+                        {
+                            "request": result["request"],
+                            "evidence": result["evidence"],
+                            "deterministic_recommendation": result["recommendation"],
+                            "llm": llm_result,
+                        }
+                    )
+                )
+                llm_result["audit_status"] = "stored"
+            except psycopg.Error:
+                llm_result["audit_status"] = "unavailable"
+        return result
 
     return api
 
 
-app = create_app()
+app = create_app(enhancer=build_enhancer_from_environment())

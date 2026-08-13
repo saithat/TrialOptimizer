@@ -496,6 +496,30 @@ CREATE INDEX IF NOT EXISTS convoke_program_indication_idx
 CREATE INDEX IF NOT EXISTS convoke_program_trials_gin
     ON convoke_program_snapshot USING gin (trials);
 
+CREATE TABLE IF NOT EXISTS llm_recommendation_run (
+    id                          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_payload             jsonb NOT NULL,
+    evidence_snapshot           jsonb NOT NULL,
+    deterministic_recommendation jsonb NOT NULL,
+    llm_output                  jsonb,
+    provider                    text NOT NULL DEFAULT 'openai',
+    model                       text NOT NULL,
+    prompt_version              text NOT NULL,
+    status                      text NOT NULL CHECK (status IN (
+                                    'enhanced', 'fallback', 'validation_failed'
+                                )),
+    provider_response_id        text,
+    included_convoke_context    boolean NOT NULL DEFAULT false,
+    input_tokens                integer,
+    output_tokens               integer,
+    total_tokens                integer,
+    error_category              text,
+    created_at                  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS llm_recommendation_created_idx
+    ON llm_recommendation_run (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS entity_resolution_candidate (
     id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     source_system       text NOT NULL,
