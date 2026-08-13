@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: trialopt
+      POSTGRES_USER: trialopt
+      POSTGRES_PASSWORD: trialopt
+    ports:
+      - "5432:5432"
+    volumes:
+      - trialopt-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trialopt -d trialopt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  trialopt-postgres:

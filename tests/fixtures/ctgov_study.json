@@ -1,0 +1,88 @@
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCT01234567",
+      "briefTitle": "A Study of Example Drug in Example Disease",
+      "officialTitle": "A Randomized Study of Example Drug in Example Disease"
+    },
+    "statusModule": {
+      "overallStatus": "TERMINATED",
+      "whyStopped": "The primary endpoint was not met",
+      "startDateStruct": {"date": "2021-01-15", "type": "ACTUAL"},
+      "primaryCompletionDateStruct": {"date": "2023-04", "type": "ACTUAL"},
+      "completionDateStruct": {"date": "2023-06-01", "type": "ACTUAL"},
+      "lastUpdatePostDateStruct": {"date": "2024-02-05", "type": "ACTUAL"}
+    },
+    "sponsorCollaboratorsModule": {
+      "leadSponsor": {"name": "Example Bio, Inc.", "class": "INDUSTRY"},
+      "collaborators": [{"name": "Example University", "class": "OTHER"}]
+    },
+    "conditionsModule": {
+      "conditions": ["Example Disease"]
+    },
+    "designModule": {
+      "studyType": "INTERVENTIONAL",
+      "phases": ["PHASE2"],
+      "enrollmentInfo": {"count": 120, "type": "ACTUAL"},
+      "designInfo": {
+        "allocation": "RANDOMIZED",
+        "interventionModel": "PARALLEL",
+        "primaryPurpose": "TREATMENT",
+        "maskingInfo": {"masking": "DOUBLE"}
+      }
+    },
+    "eligibilityModule": {
+      "sex": "ALL",
+      "minimumAge": "18 Years",
+      "maximumAge": "75 Years",
+      "healthyVolunteers": false
+    },
+    "armsInterventionsModule": {
+      "armGroups": [
+        {"label": "Example Drug", "type": "EXPERIMENTAL", "description": "Active arm"},
+        {"label": "Placebo", "type": "PLACEBO_COMPARATOR", "description": "Control arm"}
+      ],
+      "interventions": [
+        {
+          "type": "DRUG",
+          "name": "EX-101",
+          "description": "Oral example drug",
+          "armGroupLabels": ["Example Drug"],
+          "otherNames": ["Examplemab"]
+        }
+      ]
+    },
+    "outcomesModule": {
+      "primaryOutcomes": [
+        {"measure": "Change in symptom score", "timeFrame": "Week 24", "description": "Primary"}
+      ],
+      "secondaryOutcomes": [
+        {"measure": "Treatment-emergent adverse events", "timeFrame": "Week 28"}
+      ]
+    },
+    "referencesModule": {
+      "references": [
+        {
+          "pmid": "12345678",
+          "type": "RESULT",
+          "citation": "Example trial report. doi: 10.1000/example.123."
+        }
+      ],
+      "seeAlsoLinks": [{"label": "Sponsor results", "url": "https://example.test/results"}]
+    },
+    "contactsLocationsModule": {
+      "locations": [
+        {
+          "facility": "Example Medical Center",
+          "status": "COMPLETED",
+          "city": "Boston",
+          "state": "Massachusetts",
+          "zip": "02115",
+          "country": "United States",
+          "geoPoint": {"lat": 42.34, "lon": -71.10}
+        }
+      ]
+    }
+  },
+  "hasResults": true
+}
