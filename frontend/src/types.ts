@@ -15,7 +15,7 @@ export interface ProtocolSection {
   text: string
 }
 
-export type TrialOutcome = 'success' | 'endpoint-miss' | 'stopped'
+export type TrialOutcome = 'success' | 'endpoint-miss' | 'stopped' | 'unassessed'
 
 export interface EvidenceSource {
   label: string
@@ -31,7 +31,7 @@ export interface EvidenceRecord {
   status: 'COMPLETED' | 'ACTIVE_NOT_RECRUITING' | 'TERMINATED' | 'WITHDRAWN'
   outcome: TrialOutcome
   outcomeLabel: string
-  actualEnrollment: number
+  actualEnrollment: number | null
   reason: string
   result: string
   relevance: string
@@ -78,13 +78,7 @@ export interface Finding {
   sourceIds: string[]
   supportIds: string[]
   evidenceLabel: string
-}
-
-export interface ScenarioMetric {
-  label: string
-  before: string
-  after: string
-  direction: 'up' | 'down' | 'neutral'
+  reviewMethod?: 'rules' | 'model'
 }
 
 export interface TrialProfile {
@@ -116,4 +110,31 @@ export interface NctReview {
   profile: TrialProfile
   sections: ProtocolSection[]
   findings: Finding[]
+}
+
+export interface ProtocolReviewResult {
+  reviewId: number | null
+  status: 'rules_only' | 'enhanced' | 'fallback' | 'validation_failed'
+  message: string | null
+  model: string | null
+  summary: string | null
+  findings: Finding[]
+  evidence: EvidenceRecord[]
+  evidenceGaps: string[]
+  reviewQuestions: string[]
+  databaseStatus: 'ready' | 'unavailable'
+  saved: boolean
+}
+
+export interface ProtocolReviewHistoryItem {
+  id: number
+  source_type: 'nct' | 'text' | 'demo'
+  nct_id: string | null
+  title: string
+  status: 'rules_only' | 'enhanced' | 'fallback' | 'validation_failed'
+  model: string | null
+  deterministic_finding_count: number
+  model_finding_count: number
+  decision_count: number
+  created_at: string
 }

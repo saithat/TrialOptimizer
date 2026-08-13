@@ -1,12 +1,12 @@
 # Trial Optimizer
 
-Trial Optimizer is an evidence-first workspace for learning from prior clinical programs and
-reviewing trial designs. It combines two applications:
+Trial Optimizer stores clinical trial evidence, compares study designs, and reviews protocols. Its
+dashboard and protocol reviewer use the same backend and PostgreSQL database:
 
-- **Optimizer dashboard** — a FastAPI and PostgreSQL application for registry ingestion,
-  source-linked outcome assessment, analog comparison, and auditable trial-design recommendations.
-- **Protocol reviewer** — a React application for reviewing an NCT record or protocol draft,
-  marking risky clauses, and tracing each suggestion to trial analogs and supporting sources.
+- **Trials and recommendations** — registry ingestion, source-linked outcome assessment, similar
+  trial comparison, and trial-design recommendations.
+- **Protocol review** — review an NCT record or protocol draft against saved trial records and
+  supporting references, with optional citation-checked model analysis.
 
 The system keeps registry state, observed events, evidence claims, and human assessment separate.
 `COMPLETED` therefore never means "successful," and `TERMINATED` never supplies a causal reason by
@@ -89,6 +89,16 @@ Import the JSON envelope returned by Convoke's `query_program_tracker` MCP tool:
 uv run trialopt ingest-convoke-programs data/convoke/programs.json
 ```
 
+The dashboard compares the same drug across indications directly from saved Program Tracker
+records, so it does not require the older analog CSV import. The recommendation view derives
+related-disease cohorts from the latest cached Convoke program for each drug and indication. It
+prioritizes the same drug in another indication, then shared
+targets, and shows compact summaries plus ClinicalTrials.gov links for the tracker's linked trials.
+These are transparent Trial Optimizer groupings—not Convoke-authored similarity scores or claims
+that clinical outcomes transfer between diseases. When the tracker truncates a trial list, the UI
+shows both the returned subset and the reported total. No separate analog CSV import is required;
+the cohorts are rebuilt from the cached Program Tracker records for each recommendation request.
+
 Import a Bright Data JSON, JSONL, NDJSON, or CSV snapshot already downloaded locally:
 
 ```bash
@@ -103,15 +113,21 @@ uv run trialopt download-brightdata SNAPSHOT_ID data/snapshot.jsonl
 
 ## Evidence and AI boundaries
 
-The protocol reviewer includes a clearly labeled synthetic protocol, scenario outputs, and
-qualitative analogy judgments. Live NCT fields come from the official registry, but a registry
-status or sponsor-submitted explanation is not treated as a causal outcome assessment. A stopped
-trial remains distinct from a completed trial that missed its prespecified endpoint.
+The protocol reviewer includes a clearly labeled sample protocol. Live NCT fields come from the
+official registry. Rule-based checks run first, then the backend retrieves relevant saved trial
+records and can add citation-checked model findings. Reviews, evidence snapshots, and decisions are
+saved in PostgreSQL. A registry status or sponsor-submitted explanation is not treated as a causal
+outcome assessment. A stopped trial remains distinct from a completed trial that missed its
+prespecified endpoint.
 
-The optimizer can optionally add OpenAI synthesis to its deterministic benchmark. The model must
-use supplied citation identifiers, cannot replace deterministic design fields or outcome labels,
-and falls back safely if provider or citation validation fails. Each attempt is recorded in
-`llm_recommendation_run` with its evidence snapshot, structured response, token usage, and status.
+The optimizer and protocol reviewer can optionally add OpenAI analysis after their deterministic
+checks. The model must use supplied citation identifiers, cannot replace registry fields or outcome
+labels, and falls back safely if provider or citation validation fails. Recommendation attempts are
+recorded in `llm_recommendation_run`; protocol reviews and user decisions are recorded in
+`protocol_review_run` and `protocol_review_decision` with their evidence snapshots and model usage.
+Trial-design results render before the optional model call finishes; the AI summary runs separately
+and appears when it is ready. Immediate review questions remain visible, while non-duplicate model
+questions are added to the same panel with a saved-evidence citation or an evidence-gap label.
 
 Convoke-derived records are excluded from OpenAI requests by default. Set
 `OPENAI_INCLUDE_CONVOKE_CONTEXT=true` only after confirming that external processing is permitted.

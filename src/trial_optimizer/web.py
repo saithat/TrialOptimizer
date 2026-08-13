@@ -6,12 +6,14 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from threading import Lock
+from typing import Any, Literal, Protocol
 from urllib.error import HTTPError, URLError
+from uuid import uuid4
 
 import psycopg
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +23,13 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from trial_optimizer.clients.clinical_trials_gov import ClinicalTrialsGovClient
+from trial_optimizer.convoke import (
+    build_program_comparisons,
+    build_related_disease_analogs,
+    indications_match,
+)
 from trial_optimizer.llm import (
+    PROTOCOL_PROMPT_VERSION,
     CitationValidationError,
     RecommendationEnhancer,
     build_enhancer_from_environment,
@@ -46,6 +54,28 @@ class TrialDesignInput(BaseModel):
     phase: str | None = Field(default=None, max_length=30)
     target: str | None = Field(default=None, max_length=100)
     route: str | None = Field(default=None, max_length=100)
+
+
+class ProtocolSectionInput(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=240)
+    text: str = Field(min_length=1, max_length=30_000)
+
+
+class ProtocolReviewInput(BaseModel):
+    source_type: Literal["nct", "text", "demo"]
+    nct_id: str | None = Field(default=None, pattern=r"^NCT[0-9]{8}$")
+    title: str = Field(min_length=1, max_length=500)
+    sections: list[ProtocolSectionInput] = Field(min_length=1, max_length=80)
+    findings: list[dict[str, Any]] = Field(default_factory=list, max_length=80)
+    profile: dict[str, Any] | None = None
+
+
+class ProtocolReviewDecisionInput(BaseModel):
+    finding_id: str = Field(min_length=1, max_length=200)
+    decision: Literal["accepted", "rejected", "team_review"]
+    original_text: str | None = Field(default=None, max_length=10_000)
+    replacement_text: str | None = Field(default=None, max_length=10_000)
 
 
 def _mode(values: Sequence[str | None], fallback: str) -> str:
@@ -95,6 +125,231 @@ def humanize_category(value: str | None) -> str:
     return " ".join(part.capitalize() for part in value.replace("-", "_").split("_") if part)
 
 
+def recommendation_evidence_strength(
+    *,
+    reviewed_successes: int,
+    reviewed_failures: int,
+    direct_trial_records: int,
+    direct_program_records: int,
+) -> str:
+    if reviewed_successes >= 3 and reviewed_failures:
+        return "strong"
+    if reviewed_successes or reviewed_failures or direct_trial_records >= 3 or direct_program_records:
+        return "moderate"
+    return "exploratory"
+
+
+def endpoint_focus_terms(disease: str) -> tuple[str, ...]:
+    normalized = normalize_name(disease)
+    if "obesity" in normalized or "overweight" in normalized:
+        return ("weight", "weight loss", "bmi", "waist", "wl")
+    if "diabetes" in normalized or "glycemic" in normalized:
+        return ("hba1c", "glycated hemoglobin", "glucose", "glycemic")
+    if any(term in normalized for term in ("cancer", "carcinoma", "tumor", "lymphoma")):
+        return ("progression free", "overall survival", "objective response", "recist")
+    return ()
+
+
+def endpoint_concept_key(title: str, disease: str) -> str:
+    normalized_title = normalize_name(title)
+    normalized_disease = normalize_name(disease)
+    if "obesity" in normalized_disease or "overweight" in normalized_disease:
+        if any(
+            term in normalized_title
+            for term in ("lean body mass", "metabolic rate", "energy expenditure")
+        ):
+            return normalized_title
+        if "weight" in normalized_title or normalized_title == "wl":
+            if any(
+                term in normalized_title
+                for term in ("proportion", "participants", "responder", "at least")
+            ):
+                return "weight response threshold"
+            return "body weight change"
+        if "body mass index" in normalized_title or "bmi" in normalized_title:
+            return "body mass index"
+        if "waist" in normalized_title:
+            return "waist measure"
+    return normalized_title
+
+
+def endpoint_relevance_score(
+    title: str,
+    *,
+    nct_id: str,
+    phase_matched_nct_ids: set[str],
+    reviewed_success_nct_ids: set[str],
+    focus_terms: Sequence[str],
+    phase: str | None,
+) -> int:
+    normalized_title = normalize_name(title)
+    score = 0
+    if nct_id in reviewed_success_nct_ids:
+        score += 12
+    if nct_id in phase_matched_nct_ids:
+        score += 6
+    if focus_terms and any(term in normalized_title for term in focus_terms):
+        score += 8
+    elif focus_terms:
+        score -= 4
+    if phase and any(
+        term in normalized_title
+        for term in (
+            "area under the curve",
+            "auc",
+            "concentration time",
+            "pharmacokinetic",
+            "maximum concentration",
+            "cmax",
+        )
+    ):
+        score -= 10
+    if any(
+        term in normalized_title
+        for term in (
+            "bone mineral",
+            "energy expenditure",
+            "lean body mass",
+            "metabolic rate",
+            "vbmd",
+        )
+    ):
+        score -= 10
+    return score
+
+
+_REVIEW_STOPWORDS = {
+    "about",
+    "after",
+    "before",
+    "clinical",
+    "criteria",
+    "during",
+    "eligible",
+    "enrollment",
+    "ecog",
+    "endpoint",
+    "outcomes",
+    "outcome",
+    "performance",
+    "phase",
+    "participants",
+    "patients",
+    "primary",
+    "protocol",
+    "response",
+    "status",
+    "study",
+    "treatment",
+    "trial",
+    "weeks",
+    "with",
+    "multiple",
+}
+
+
+def _review_terms(request: ProtocolReviewInput) -> list[str]:
+    profile = request.profile or {}
+    candidates = [
+        *profile.get("conditions", []),
+        *profile.get("interventions", []),
+    ]
+    if not candidates:
+        combined = " ".join([request.title, *(section.text for section in request.sections)])
+        candidates = [
+            token
+            for token in normalize_name(combined).split()
+            if len(token) >= 5 and token not in _REVIEW_STOPWORDS
+        ][:20]
+    terms: list[str] = []
+    for candidate in candidates:
+        term = normalize_name(str(candidate)).strip()
+        if len(term) >= 3 and term not in terms:
+            terms.append(term)
+    return terms[:20]
+
+
+def _frontend_review_evidence(item: dict[str, Any]) -> dict[str, Any]:
+    reviewed_outcome = item.get("reviewed_outcome")
+    registry_status = str(item.get("registry_status") or "UNKNOWN")
+    if reviewed_outcome in {"success", "partial_success"}:
+        outcome = "success"
+        outcome_label = "Reviewed success" if reviewed_outcome == "success" else "Partial success"
+    elif reviewed_outcome == "failure":
+        if registry_status in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}:
+            outcome = "stopped"
+            outcome_label = "Reviewed failure; stopped"
+        else:
+            outcome = "endpoint-miss"
+            outcome_label = "Reviewed failure"
+    elif registry_status in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}:
+        outcome = "stopped"
+        outcome_label = "Stopped; outcome not reviewed"
+    else:
+        outcome = "unassessed"
+        outcome_label = "Outcome not reviewed"
+
+    phases = item.get("phases") or []
+    conditions = [str(value) for value in item.get("conditions") or []]
+    interventions = [str(value) for value in item.get("interventions") or []]
+    rationale = item.get("assessment_rationale")
+    why_stopped = item.get("why_stopped")
+    return {
+        "id": item["citation_id"],
+        "citationId": item["citation_id"],
+        "nctId": item["nct_id"],
+        "title": item.get("title") or "Untitled trial",
+        "phase": " / ".join(humanize_category(value) for value in phases) or "Phase not stated",
+        "status": registry_status,
+        "outcome": outcome,
+        "outcomeLabel": outcome_label,
+        "actualEnrollment": item.get("enrollment_count"),
+        "reason": rationale or why_stopped or "No accepted outcome assessment is saved.",
+        "result": (
+            rationale
+            or (f"Registry reason for stopping: {why_stopped}" if why_stopped else None)
+            or "The saved registry record does not establish the trial outcome."
+        ),
+        "relevance": "Matched using the condition, intervention, or protocol text.",
+        "relevanceLabel": "Saved database match",
+        "analogs": [*conditions[:3], *interventions[:3]],
+        "sources": [
+            {
+                "label": "ClinicalTrials.gov",
+                "kind": "Registry",
+                "url": item.get("source_url")
+                or f"https://clinicaltrials.gov/study/{item['nct_id']}",
+            }
+        ],
+        "sourceSystem": item.get("source_system"),
+    }
+
+
+def _frontend_model_findings(llm_result: dict[str, Any]) -> list[dict[str, Any]]:
+    output = llm_result.get("output") or {}
+    findings = []
+    for index, finding in enumerate(output.get("findings") or [], start=1):
+        citations = finding.get("citation_ids") or []
+        findings.append(
+            {
+                "id": f"model-{index}-{abs(hash(finding.get('title', 'finding')))}",
+                "category": finding["category"],
+                "severity": finding["severity"],
+                "title": finding["title"],
+                "sectionId": finding["section_id"],
+                "phrase": finding["quote"],
+                "explanation": finding["explanation"],
+                "suggestion": finding["suggestion"],
+                "confidence": finding["confidence"],
+                "sourceIds": citations,
+                "supportIds": [],
+                "evidenceLabel": f"{len(citations)} saved record{'s' if len(citations) != 1 else ''}",
+                "reviewMethod": "model",
+            }
+        )
+    return findings
+
+
 class DashboardStore(Protocol):
     def overview(self) -> dict[str, Any]: ...
 
@@ -111,6 +366,18 @@ class DashboardStore(Protocol):
     def recommend_trial_design(self, request: TrialDesignInput) -> dict[str, Any]: ...
 
     def record_recommendation_run(self, record: dict[str, Any]) -> None: ...
+
+    def protocol_review_evidence(
+        self, request: ProtocolReviewInput | None, *, limit: int = 24
+    ) -> list[dict[str, Any]]: ...
+
+    def record_protocol_review(self, record: dict[str, Any]) -> int: ...
+
+    def protocol_review_history(self, *, limit: int) -> list[dict[str, Any]]: ...
+
+    def record_protocol_review_decision(
+        self, review_id: int, decision: ProtocolReviewDecisionInput
+    ) -> None: ...
 
     def is_ready(self) -> bool: ...
 
@@ -145,6 +412,25 @@ class PostgresDashboardStore:
                     (SELECT count(*) FROM analog_relationship)::int AS analog_relationships,
                     (SELECT count(*) FROM analog_relationship
                         WHERE resolution_status != 'resolved')::int AS unresolved_analogs,
+                    (SELECT count(*) FROM convoke_program_snapshot)::int
+                        AS convoke_program_snapshots,
+                    (
+                        (SELECT count(*) FROM analog_relationship) +
+                        COALESCE((
+                            SELECT sum(program_count - 1)
+                            FROM (
+                                SELECT count(*) AS program_count
+                                FROM (
+                                    SELECT DISTINCT
+                                        lower(drug_name) AS drug_name,
+                                        lower(indication_name) AS indication_name
+                                    FROM convoke_program_snapshot
+                                ) saved_programs
+                                GROUP BY drug_name
+                                HAVING count(*) > 1
+                            ) comparable_drugs
+                        ), 0)
+                    )::int AS program_comparisons,
                     (SELECT count(*) FROM source_document)::int AS source_documents,
                     (
                         (SELECT count(*) FROM evidence_claim WHERE review_status = 'pending') +
@@ -368,7 +654,7 @@ class PostgresDashboardStore:
 
     def analogs(self, *, limit: int) -> list[dict[str, Any]]:
         with self._connection() as connection:
-            rows = connection.execute(
+            explicit_rows = connection.execute(
                 """
                 SELECT
                     anchor_label,
@@ -387,7 +673,58 @@ class PostgresDashboardStore:
                 """,
                 (limit,),
             ).fetchall()
-        return list(rows)
+            remaining = limit - len(explicit_rows)
+            if remaining <= 0:
+                return list(explicit_rows)
+            program_rows = connection.execute(
+                """
+                SELECT DISTINCT ON (lower(cps.drug_name), lower(cps.indication_name))
+                    cps.drug_name,
+                    cps.indication_name,
+                    cps.development_stage,
+                    cps.program_status,
+                    cps.organizations,
+                    cps.targets,
+                    cps.modalities,
+                    cps.routes_of_administration,
+                    cps.trials,
+                    cps.trial_count_total,
+                    cps.trials_truncated,
+                    cps.observed_at,
+                    sd.canonical_url AS source_url
+                FROM convoke_program_snapshot cps
+                JOIN source_document sd ON sd.id = cps.source_document_id
+                ORDER BY
+                    lower(cps.drug_name),
+                    lower(cps.indication_name),
+                    cps.observed_at DESC,
+                    cps.id DESC
+                """
+            ).fetchall()
+
+        explicit_pairs = {
+            frozenset(
+                {
+                    normalize_name(str(row["anchor_label"])),
+                    normalize_name(str(row["analog_label"])),
+                }
+            )
+            for row in explicit_rows
+        }
+        derived_rows = [
+            row
+            for row in build_program_comparisons(
+                [dict(program) for program in program_rows], limit=limit
+            )
+            if frozenset(
+                {
+                    normalize_name(str(row["anchor_label"])),
+                    normalize_name(str(row["analog_label"])),
+                }
+            )
+            not in explicit_pairs
+        ]
+        return [*explicit_rows, *derived_rows[:remaining]]
 
     def sources(self) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -405,6 +742,205 @@ class PostgresDashboardStore:
                 """
             ).fetchall()
         return list(rows)
+
+    def protocol_review_evidence(
+        self, request: ProtocolReviewInput | None, *, limit: int = 24
+    ) -> list[dict[str, Any]]:
+        terms = _review_terms(request) if request is not None else []
+        if request is not None and not terms:
+            return []
+        nct_id = request.nct_id if request is not None else None
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                WITH review_terms AS (
+                    SELECT unnest(%s::text[]) AS term
+                )
+                SELECT
+                    t.nct_id,
+                    t.brief_title AS title,
+                    t.overall_status AS registry_status,
+                    t.why_stopped,
+                    t.phases,
+                    t.enrollment_count,
+                    t.has_results,
+                    t.last_update_posted,
+                    sd.source_system,
+                    COALESCE(
+                        sd.canonical_url,
+                        'https://clinicaltrials.gov/study/' || t.nct_id
+                    ) AS source_url,
+                    COALESCE(
+                        (
+                            SELECT array_agg(DISTINCT tc.source_name ORDER BY tc.source_name)
+                            FROM trial_condition tc
+                            WHERE tc.trial_version_id = tv.id
+                        ),
+                        '{}'::text[]
+                    ) AS conditions,
+                    COALESCE(
+                        (
+                            SELECT array_agg(DISTINCT ti.source_name ORDER BY ti.source_name)
+                            FROM trial_intervention ti
+                            WHERE ti.trial_version_id = tv.id
+                        ),
+                        '{}'::text[]
+                    ) AS interventions,
+                    accepted.outcome AS reviewed_outcome,
+                    accepted.confidence AS outcome_confidence,
+                    accepted.rationale AS assessment_rationale
+                FROM trial t
+                LEFT JOIN trial_version tv ON tv.trial_id = t.id AND tv.valid_to IS NULL
+                LEFT JOIN source_document sd ON sd.id = tv.source_document_id
+                LEFT JOIN LATERAL (
+                    SELECT oa.outcome, oa.confidence, oa.rationale
+                    FROM outcome_assessment oa
+                    WHERE oa.trial_id = t.id AND oa.review_status = 'accepted'
+                    ORDER BY oa.evidence_cutoff_date DESC, oa.created_at DESC
+                    LIMIT 1
+                ) accepted ON true
+                WHERE (%s::text IS NULL OR t.nct_id != %s)
+                  AND (
+                    NOT EXISTS (SELECT 1 FROM review_terms)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM review_terms rt
+                        WHERE lower(COALESCE(t.brief_title, '')) LIKE '%%' || rt.term || '%%'
+                           OR EXISTS (
+                                SELECT 1 FROM trial_condition tc_match
+                                WHERE tc_match.trial_version_id = tv.id
+                                  AND lower(tc_match.source_name) LIKE '%%' || rt.term || '%%'
+                           )
+                           OR EXISTS (
+                                SELECT 1 FROM trial_intervention ti_match
+                                WHERE ti_match.trial_version_id = tv.id
+                                  AND lower(ti_match.source_name) LIKE '%%' || rt.term || '%%'
+                           )
+                    )
+                  )
+                ORDER BY
+                    (accepted.outcome IS NOT NULL) DESC,
+                    accepted.confidence DESC NULLS LAST,
+                    t.last_update_posted DESC NULLS LAST,
+                    t.nct_id
+                LIMIT %s
+                """,
+                (terms, nct_id, nct_id, limit),
+            ).fetchall()
+
+        evidence: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            outcome = item.get("reviewed_outcome")
+            item["citation_id"] = (
+                f"saved:{outcome}:{item['nct_id']}"
+                if outcome
+                else f"saved:registry:{item['nct_id']}"
+            )
+            item["classification"] = (
+                "reviewed_outcome" if outcome else "registry_record_outcome_unknown"
+            )
+            item["label"] = f"{item['nct_id']} — {item.get('title') or 'Untitled trial'}"
+            evidence.append(item)
+        return evidence
+
+    def record_protocol_review(self, record: dict[str, Any]) -> int:
+        llm = record.get("llm") or {}
+        usage = llm.get("usage") or {}
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO protocol_review_run (
+                    source_type, nct_id, title, input_snapshot, evidence_snapshot,
+                    deterministic_findings, llm_output, provider, model, prompt_version,
+                    status, provider_response_id, included_convoke_context,
+                    input_tokens, output_tokens, total_tokens, error_category
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    record["request"]["source_type"],
+                    record["request"].get("nct_id"),
+                    record["request"]["title"],
+                    Jsonb(record["request"]),
+                    Jsonb(record.get("evidence", [])),
+                    Jsonb(record["request"].get("findings", [])),
+                    Jsonb(llm.get("output")) if llm.get("output") is not None else None,
+                    llm.get("provider"),
+                    llm.get("model"),
+                    llm.get("prompt_version"),
+                    llm.get("status", "rules_only"),
+                    llm.get("provider_response_id"),
+                    bool(llm.get("included_convoke_context", False)),
+                    usage.get("input_tokens"),
+                    usage.get("output_tokens"),
+                    usage.get("total_tokens"),
+                    llm.get("error_category"),
+                ),
+            ).fetchone()
+        assert row is not None
+        return int(row["id"])
+
+    def protocol_review_history(self, *, limit: int) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    pr.id,
+                    pr.source_type,
+                    pr.nct_id,
+                    pr.title,
+                    pr.status,
+                    pr.model,
+                    pr.created_at,
+                    jsonb_array_length(pr.deterministic_findings) AS deterministic_finding_count,
+                    COALESCE(jsonb_array_length(pr.llm_output -> 'findings'), 0)
+                        AS model_finding_count,
+                    count(pd.id)::int AS decision_count
+                FROM protocol_review_run pr
+                LEFT JOIN protocol_review_decision pd ON pd.protocol_review_id = pr.id
+                GROUP BY pr.id
+                ORDER BY pr.created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        return list(rows)
+
+    def record_protocol_review_decision(
+        self, review_id: int, decision: ProtocolReviewDecisionInput
+    ) -> None:
+        with self._connection() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM protocol_review_run WHERE id = %s", (review_id,)
+            ).fetchone()
+            if exists is None:
+                raise LookupError("Protocol review not found")
+            connection.execute(
+                """
+                INSERT INTO protocol_review_decision (
+                    protocol_review_id, finding_id, decision, original_text, replacement_text
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (protocol_review_id, finding_id)
+                DO UPDATE SET
+                    decision = EXCLUDED.decision,
+                    original_text = EXCLUDED.original_text,
+                    replacement_text = EXCLUDED.replacement_text,
+                    decided_at = now()
+                """,
+                (
+                    review_id,
+                    decision.finding_id,
+                    decision.decision,
+                    decision.original_text,
+                    decision.replacement_text,
+                ),
+            )
 
     def recommend_trial_design(self, request: TrialDesignInput) -> dict[str, Any]:
         phase = _canonical_phase(request.phase)
@@ -527,7 +1063,7 @@ class PostgresDashboardStore:
                 ORDER BY CASE accepted.outcome
                     WHEN 'success' THEN 1 WHEN 'partial_success' THEN 2 ELSE 3 END,
                     om.ordinal
-                LIMIT 100
+                LIMIT 500
                 """,
                 (disease_term,),
             ).fetchall()
@@ -546,7 +1082,7 @@ class PostgresDashboardStore:
                 FROM convoke_program_snapshot
                 WHERE ({" OR ".join(convoke_filters)})
                 ORDER BY lower(drug_name), lower(indication_name), observed_at DESC
-                LIMIT 50
+                LIMIT 250
                 """,
                 convoke_parameters,
             ).fetchall()
@@ -569,6 +1105,12 @@ class PostgresDashboardStore:
             return score
 
         convoke_rows = sorted(convoke_rows, key=program_relevance, reverse=True)
+        related_diseases = build_related_disease_analogs(
+            [dict(program) for program in convoke_rows],
+            drug=request.drug,
+            disease=request.disease,
+            target=request.target,
+        )
 
         scored_trials: list[tuple[int, dict[str, Any]]] = []
         for row in trial_rows:
@@ -595,6 +1137,23 @@ class PostgresDashboardStore:
             row for row in candidates if row["assessed_outcome"] in {"success", "partial_success"}
         ][:8]
         failed = [row for row in candidates if row["assessed_outcome"] == "failure"][:8]
+        requested_drug = normalize_name(request.drug)
+        direct_asset_trials = [
+            row for row in candidates if requested_drug in set(row["normalized_interventions"])
+        ]
+        direct_asset_programs = [
+            program
+            for program in convoke_rows
+            if normalize_name(str(program["drug_name"])) == requested_drug
+        ]
+        target_key = normalize_name(request.target or "")
+        target_matched_programs = [
+            program
+            for program in convoke_rows
+            if target_key
+            and target_key
+            in {normalize_name(str(target)) for target in program["targets"] if target}
+        ]
         benchmark = [
             row
             for row in candidates
@@ -621,18 +1180,34 @@ class PostgresDashboardStore:
             for row in benchmark
             if row["enrollment_count"] is not None and row["enrollment_count"] > 0
         ]
+        median_enrollment = _percentile(enrollments, 0.5)
+        lower_quartile_enrollment = _percentile(enrollments, 0.25)
+        upper_quartile_enrollment = _percentile(enrollments, 0.75)
         endpoint_candidates: list[dict[str, str | None]] = []
         seen_endpoints: set[str] = set()
         preferred_nct_ids = {row["nct_id"] for row in successful}
+        benchmark_nct_ids = {row["nct_id"] for row in benchmark}
+        focus_terms = endpoint_focus_terms(request.disease)
         ordered_outcomes = sorted(
             primary_outcome_rows,
-            key=lambda item: (item["nct_id"] not in preferred_nct_ids, item["title"]),
+            key=lambda item: (
+                -endpoint_relevance_score(
+                    item["title"],
+                    nct_id=item["nct_id"],
+                    phase_matched_nct_ids=benchmark_nct_ids,
+                    reviewed_success_nct_ids=preferred_nct_ids,
+                    focus_terms=focus_terms,
+                    phase=phase,
+                ),
+                normalize_name(item["title"]),
+                item["nct_id"],
+            ),
         )
         for outcome in ordered_outcomes:
-            normalized_title = normalize_name(outcome["title"])
-            if normalized_title in seen_endpoints:
+            concept_key = endpoint_concept_key(outcome["title"], request.disease)
+            if concept_key in seen_endpoints:
                 continue
-            seen_endpoints.add(normalized_title)
+            seen_endpoints.add(concept_key)
             endpoint_candidates.append(
                 {
                     "title": outcome["title"],
@@ -669,6 +1244,8 @@ class PostgresDashboardStore:
         completed_seen: set[str] = set()
         today = datetime.now(UTC).date()
         for program in convoke_rows:
+            if not indications_match(program["indication_name"], request.disease):
+                continue
             is_active_program = str(program["program_status"] or "").casefold() == "active"
             if not is_active_program:
                 inactive_programs.append(
@@ -761,31 +1338,108 @@ class PostgresDashboardStore:
         causal_categories = Counter(
             category for row in failed for category in row["causal_categories"]
         )
-        risk_flags = [
+        review_questions = [
             {
                 "category": category,
                 "count": count,
-                "message": f"{humanize_category(category)} appeared in {count} reviewed failed trial assessment{'s' if count != 1 else ''}.",
+                "message": (
+                    f"How will the design address {humanize_category(category).casefold()}, which "
+                    f"appeared in {count} reviewed failed trial assessment"
+                    f"{'s' if count != 1 else ''}?"
+                ),
             }
             for category, count in causal_categories.most_common(5)
         ]
 
-        if len(successful) >= 3 and failed:
-            evidence_strength = "strong"
-        elif len(candidates) >= 5 or successful or failed:
-            evidence_strength = "moderate"
-        else:
-            evidence_strength = "exploratory"
+        has_direct_asset_history = bool(direct_asset_trials or direct_asset_programs)
+
+        def add_review_question(category: str, message: str) -> None:
+            if message not in {item["message"] for item in review_questions}:
+                review_questions.append({"category": category, "count": None, "message": message})
+
+        if not has_direct_asset_history:
+            add_review_question(
+                "asset evidence",
+                f"What human safety, exposure, and dose data support moving {request.drug} into "
+                f"{request.phase or 'the proposed phase'}?",
+            )
+        if request.target:
+            add_review_question(
+                "target",
+                f"What evidence shows {request.drug} engages {request.target} at the planned dose, "
+                "and how does it differ from existing programs against that target?",
+            )
+        add_review_question(
+            "endpoint",
+            f"Which primary endpoint, time frame, and estimand should define benefit in "
+            f"{request.disease}?",
+        )
+        add_review_question(
+            "comparator",
+            f"Why is {comparator.casefold()} appropriate, and would standard care or an active "
+            "comparator answer the development question better?",
+        )
+        add_review_question(
+            "sample size",
+            "What effect size, variability, dropout rate, and missing-data assumptions will be "
+            "used for the power calculation?",
+        )
+        add_review_question(
+            "population",
+            f"Which {request.disease} population should be studied, including prior therapy, "
+            "disease severity, major comorbidities, and concomitant treatment?",
+        )
+        review_questions = review_questions[:8]
+
+        evidence_strength = recommendation_evidence_strength(
+            reviewed_successes=len(successful),
+            reviewed_failures=len(failed),
+            direct_trial_records=len(direct_asset_trials),
+            direct_program_records=len(direct_asset_programs),
+        )
 
         requested_phase = request.phase or "Phase 2"
-        rationale = [
-            f"Compared with {len(benchmark)} registered trial(s) in {request.disease}.",
-            f"The suggested design uses {len(successful)} reviewed successful and {len(failed)} reviewed failed similar trial(s).",
-            f"Related records include {len(active_trials)} active trial(s), {len(completed_trials)} completed trial(s), and {len(inactive_programs)} inactive or discontinued program(s).",
-        ]
-        if not successful or not failed:
+        design_basis_count = len(design_basis)
+        allocation_support = sum(row["allocation"] == allocation for row in design_basis)
+        model_support = sum(row["intervention_model"] == intervention_model for row in design_basis)
+        masking_support = sum(row["masking"] == masking for row in design_basis)
+        rationale: list[str] = []
+        if has_direct_asset_history:
             rationale.append(
-                "Successful or failed trial data is missing. Treat this design as a suggestion that requires review."
+                f"Found {len(direct_asset_trials)} direct trial record(s) and "
+                f"{len(direct_asset_programs)} saved program record(s) for {request.drug}."
+            )
+        else:
+            context = f" and programs sharing {request.target}" if request.target else ""
+            rationale.append(
+                f"No direct trial or program history was found for {request.drug}. The proposed "
+                f"structure uses {requested_phase} {request.disease} studies{context}."
+            )
+        rationale.append(
+            f"The structure comes from {design_basis_count} relevant record(s): "
+            f"{allocation_support} report {humanize_category(allocation).casefold()} allocation, "
+            f"{model_support} report a {humanize_category(intervention_model).casefold()} model, "
+            f"and {masking_support} report {humanize_category(masking).casefold()} masking."
+        )
+        rationale.append(
+            f"Enrollment was reported for {len(enrollments)} phase-matched trial(s); the median "
+            f"was {median_enrollment if median_enrollment is not None else 'not available'}. This "
+            "is context, not a powered sample-size recommendation."
+        )
+        if request.target:
+            target_indications = {
+                normalize_name(str(program["indication_name"]))
+                for program in target_matched_programs
+            }
+            rationale.append(
+                f"Saved target context includes {len(target_matched_programs)} {request.target} "
+                f"program record(s) across {len(target_indications)} indication(s). It does not "
+                f"establish efficacy or safety for {request.drug}."
+            )
+        if not successful and not failed:
+            rationale.append(
+                "No reviewed success or failure assessments support these choices, so the "
+                "recommendation is exploratory."
             )
 
         return {
@@ -811,15 +1465,15 @@ class PostgresDashboardStore:
                     ),
                 },
                 "sample_size_benchmark": {
-                    "median": _percentile(enrollments, 0.5),
-                    "lower_quartile": _percentile(enrollments, 0.25),
-                    "upper_quartile": _percentile(enrollments, 0.75),
+                    "median": median_enrollment,
+                    "lower_quartile": lower_quartile_enrollment,
+                    "upper_quartile": upper_quartile_enrollment,
                     "trial_count": len(enrollments),
                     "caveat": "This only describes similar trials. Determine final enrollment with a prespecified statistical power calculation.",
                 },
                 "primary_endpoint_candidates": endpoint_candidates,
                 "rationale": rationale,
-                "risk_flags": risk_flags,
+                "risk_flags": review_questions,
             },
             "evidence": {
                 "successful": [evidence_item(row) for row in successful],
@@ -827,6 +1481,7 @@ class PostgresDashboardStore:
                 "active": active_trials[:15],
                 "completed": completed_trials[:15],
                 "inactive_programs": inactive_programs[:15],
+                "related_diseases": related_diseases,
                 "unassessed_context": [
                     {
                         "nct_id": row["nct_id"],
@@ -844,6 +1499,7 @@ class PostgresDashboardStore:
             "limitations": [
                 "This compares historical trials. It is not medical, regulatory, or statistical advice.",
                 "A program marked active by Convoke may include linked trials that are already complete; displayed active trials are filtered by study completion date when available.",
+                "A related disease means another Program Tracker indication connected by the same drug or a shared target. It is not a claim of biological similarity or transferable clinical outcome.",
                 "Only reviewed outcome assessments are labeled successful or failed. Registry completion alone is not success.",
             ],
         }
@@ -907,6 +1563,9 @@ def create_app(
     api.state.enhancer = enhancer
     api.state.clinical_trials_client = registry_client
     api.state.frontend_dist = review_dist
+    recommendation_jobs: dict[str, dict[str, Any]] = {}
+    recommendation_jobs_lock = Lock()
+    api.state.recommendation_jobs = recommendation_jobs
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     if (review_dist / "assets").is_dir():
         api.mount(
@@ -924,6 +1583,70 @@ def create_app(
                 status_code=503,
                 detail="The evidence database is not available. Start PostgreSQL and initialize it.",
             ) from error
+
+    def run_recommendation_ai_job(job_id: str, deterministic_result: dict[str, Any]) -> None:
+        assert enhancer is not None
+        try:
+            llm_result = enhancer.enhance(deterministic_result)
+        except (OpenAIError, ValueError) as error:
+            status = (
+                "validation_failed" if isinstance(error, CitationValidationError) else "fallback"
+            )
+            llm_result = {
+                "status": status,
+                "provider": "openai",
+                "model": enhancer.model,
+                "prompt_version": enhancer.prompt_version,
+                "provider_response_id": None,
+                "generated_at": datetime.now(UTC),
+                "included_convoke_context": enhancer.include_convoke_context,
+                "citation_index": {},
+                "output": None,
+                "usage": {},
+                "error_category": type(error).__name__,
+                "message": (
+                    "AI review was unavailable. The rules-based comparison is still available."
+                ),
+            }
+        except Exception as error:  # noqa: BLE001 - background jobs must become terminal.
+            llm_result = {
+                "status": "fallback",
+                "provider": "openai",
+                "model": enhancer.model,
+                "prompt_version": enhancer.prompt_version,
+                "provider_response_id": None,
+                "generated_at": datetime.now(UTC),
+                "included_convoke_context": enhancer.include_convoke_context,
+                "citation_index": {},
+                "output": None,
+                "usage": {},
+                "error_category": type(error).__name__,
+                "message": (
+                    "AI review was unavailable. The rules-based comparison is still available."
+                ),
+            }
+
+        record_method = getattr(data_store, "record_recommendation_run", None)
+        if record_method is not None:
+            try:
+                record_method(
+                    jsonable_encoder(
+                        {
+                            "request": deterministic_result["request"],
+                            "evidence": deterministic_result["evidence"],
+                            "deterministic_recommendation": deterministic_result[
+                                "recommendation"
+                            ],
+                            "llm": llm_result,
+                        }
+                    )
+                )
+                llm_result["audit_status"] = "stored"
+            except psycopg.Error:
+                llm_result["audit_status"] = "unavailable"
+        llm_result["job_id"] = job_id
+        with recommendation_jobs_lock:
+            recommendation_jobs[job_id] = jsonable_encoder(llm_result)
 
     @api.get("/", include_in_schema=False)
     def index() -> FileResponse:
@@ -994,6 +1717,118 @@ def create_app(
                 detail="ClinicalTrials.gov is temporarily unavailable.",
             ) from error
 
+    @api.get("/api/protocol-reviews")
+    def protocol_review_history(
+        limit: int = Query(20, ge=1, le=100),
+    ) -> list[dict[str, Any]]:
+        method = getattr(data_store, "protocol_review_history", None)
+        if method is None:
+            return []
+        try:
+            return method(limit=limit)
+        except psycopg.Error:
+            return []
+
+    @api.post("/api/protocol-reviews")
+    def protocol_review(request: ProtocolReviewInput) -> dict[str, Any]:
+        request_payload = request.model_dump(mode="json")
+        evidence_method = getattr(data_store, "protocol_review_evidence", None)
+        evidence: list[dict[str, Any]] = []
+        database_status = "unavailable"
+        if evidence_method is not None:
+            try:
+                evidence = evidence_method(request, limit=24)
+                database_status = "ready"
+            except psycopg.Error:
+                evidence = []
+
+        llm_result: dict[str, Any]
+        review_method = getattr(enhancer, "review_protocol", None) if enhancer is not None else None
+        if review_method is None:
+            llm_result = {
+                "status": "rules_only",
+                "message": "Model review is off. The rule-based findings are still available.",
+                "output": None,
+            }
+        elif not evidence:
+            llm_result = {
+                "status": "rules_only",
+                "provider": "openai",
+                "model": enhancer.model,
+                "prompt_version": PROTOCOL_PROMPT_VERSION,
+                "message": "No matching saved records were available for model review.",
+                "output": None,
+            }
+        else:
+            try:
+                llm_result = review_method(request_payload, evidence)
+            except (OpenAIError, ValueError) as error:
+                status = (
+                    "validation_failed"
+                    if isinstance(error, CitationValidationError)
+                    else "fallback"
+                )
+                llm_result = {
+                    "status": status,
+                    "provider": "openai",
+                    "model": enhancer.model,
+                    "prompt_version": PROTOCOL_PROMPT_VERSION,
+                    "provider_response_id": None,
+                    "generated_at": datetime.now(UTC),
+                    "included_convoke_context": enhancer.include_convoke_context,
+                    "citation_index": {},
+                    "output": None,
+                    "usage": {},
+                    "error_category": type(error).__name__,
+                    "message": "Model review was unavailable. The rule-based findings are still available.",
+                }
+
+        review_id: int | None = None
+        save_method = getattr(data_store, "record_protocol_review", None)
+        if save_method is not None and database_status == "ready":
+            try:
+                review_id = save_method(
+                    jsonable_encoder(
+                        {
+                            "request": request_payload,
+                            "evidence": evidence,
+                            "llm": llm_result,
+                        }
+                    )
+                )
+            except psycopg.Error:
+                review_id = None
+
+        output = llm_result.get("output") or {}
+        return {
+            "reviewId": review_id,
+            "status": llm_result["status"],
+            "message": llm_result.get("message"),
+            "model": llm_result.get("model"),
+            "summary": output.get("summary"),
+            "findings": _frontend_model_findings(llm_result),
+            "evidence": [_frontend_review_evidence(item) for item in evidence],
+            "evidenceGaps": output.get("evidence_gaps", []),
+            "reviewQuestions": output.get("expert_review_questions", []),
+            "databaseStatus": database_status,
+            "saved": review_id is not None,
+        }
+
+    @api.post("/api/protocol-reviews/{review_id}/decisions", status_code=204)
+    def protocol_review_decision(
+        review_id: int,
+        decision: ProtocolReviewDecisionInput,
+    ) -> None:
+        method = getattr(data_store, "record_protocol_review_decision", None)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Review history is unavailable")
+        try:
+            method(review_id, decision)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except psycopg.Error as error:
+            raise HTTPException(status_code=503, detail="Review history is unavailable") from error
+
     @api.get("/api/analogs")
     def analogs(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
         return run_query("analogs", limit=limit)
@@ -1003,7 +1838,9 @@ def create_app(
         return run_query("sources")
 
     @api.post("/api/recommendations")
-    def recommendation(request: TrialDesignInput) -> dict[str, Any]:
+    def recommendation(
+        request: TrialDesignInput, background_tasks: BackgroundTasks
+    ) -> dict[str, Any]:
         result = run_query("recommend_trial_design", request)
         if enhancer is None:
             result["llm"] = {
@@ -1011,46 +1848,29 @@ def create_app(
                 "message": "AI review is off. The rules-based comparison is still available.",
             }
             return result
-
-        try:
-            llm_result = enhancer.enhance(result)
-        except (OpenAIError, ValueError) as error:
-            status = (
-                "validation_failed" if isinstance(error, CitationValidationError) else "fallback"
-            )
-            llm_result = {
-                "status": status,
-                "provider": "openai",
-                "model": enhancer.model,
-                "prompt_version": enhancer.prompt_version,
-                "provider_response_id": None,
-                "generated_at": datetime.now(UTC),
-                "included_convoke_context": enhancer.include_convoke_context,
-                "citation_index": {},
-                "output": None,
-                "usage": {},
-                "error_category": type(error).__name__,
-                "message": "AI review was unavailable. The rules-based comparison is still available.",
-            }
-        result["llm"] = llm_result
-
-        record_method = getattr(data_store, "record_recommendation_run", None)
-        if record_method is not None:
-            try:
-                record_method(
-                    jsonable_encoder(
-                        {
-                            "request": result["request"],
-                            "evidence": result["evidence"],
-                            "deterministic_recommendation": result["recommendation"],
-                            "llm": llm_result,
-                        }
-                    )
-                )
-                llm_result["audit_status"] = "stored"
-            except psycopg.Error:
-                llm_result["audit_status"] = "unavailable"
+        deterministic_result = jsonable_encoder(result)
+        job_id = uuid4().hex
+        pending = {
+            "status": "pending",
+            "job_id": job_id,
+            "model": enhancer.model,
+            "message": (
+                "AI summary is running separately. The design and evidence are ready to review."
+            ),
+        }
+        with recommendation_jobs_lock:
+            recommendation_jobs[job_id] = pending
+        background_tasks.add_task(run_recommendation_ai_job, job_id, deterministic_result)
+        result["llm"] = pending
         return result
+
+    @api.get("/api/recommendations/ai/{job_id}")
+    def recommendation_ai(job_id: str) -> dict[str, Any]:
+        with recommendation_jobs_lock:
+            job = recommendation_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="AI summary job not found")
+        return job
 
     return api
 

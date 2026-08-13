@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "trial-optimizer"
 version = "0.1.0"
-description = "Evidence-first clinical trial intelligence database and ingestion tools"
+description = "Clinical trial evidence database, protocol review, and ingestion tools"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

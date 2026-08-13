@@ -1,3 +1,37 @@
+# Database schemas
+
+Trial Optimizer uses PostgreSQL database `trialopt` and application schema `trialopt`. Connections use the search path `trialopt, public`.
+
+The canonical executable definition is [`sql/001_initial.sql`](sql/001_initial.sql). Initialize or update a database with:
+
+```bash
+uv run trialopt init-db
+```
+
+## Schema overview
+
+| Area | Tables |
+| --- | --- |
+| Ingestion and provenance | `ingestion_run`, `source_document`, `source_observation` |
+| Core entities | `organization`, `organization_alias`, `indication`, `asset`, `asset_name`, `asset_identifier`, `asset_target` |
+| Trial registry | `trial`, `trial_version`, `trial_sponsor`, `trial_condition`, `trial_arm`, `trial_intervention`, `outcome_measure`, `trial_reference`, `trial_site` |
+| Programs and evidence | `development_program`, `program_trial`, `program_event`, `regulatory_action`, `evidence_claim`, `outcome_assessment`, `outcome_assessment_evidence`, `causal_factor`, `causal_factor_evidence`, `analog_relationship` |
+| Imported program snapshots | `convoke_program_snapshot` |
+| Recommendation and review audit | `llm_recommendation_run`, `protocol_review_run`, `protocol_review_decision` |
+| Entity resolution | `entity_resolution_candidate` |
+
+## Views
+
+| View | Purpose |
+| --- | --- |
+| `current_trial_summary` | Current trial records joined to the active registry version and its source metadata |
+| `latest_accepted_outcome` | Latest accepted outcome assessment for each trial/program and assessment scope |
+
+## Executable PostgreSQL definition
+
+The following is the complete schema definition currently used by the application.
+
+```sql
 BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS trialopt;
@@ -611,3 +645,5 @@ ORDER BY COALESCE(trial_id, -1), COALESCE(program_id, -1), assessment_scope,
          evidence_cutoff_date DESC, created_at DESC;
 
 COMMIT;
+```
+

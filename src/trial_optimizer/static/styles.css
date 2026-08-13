@@ -449,6 +449,7 @@ main {
 }
 
 .design-form {
+  min-width: 0;
   padding: 27px;
   border-right: 1px solid var(--line);
   background: #f8fbf9;
@@ -589,12 +590,20 @@ main {
 .primary-button span { font-size: 15px; }
 
 .design-result {
+  min-width: 0;
   min-height: 520px;
   padding: 28px;
   overflow: hidden;
   background:
     radial-gradient(circle at 95% 0, rgba(47, 167, 140, 0.1), transparent 24rem),
     white;
+}
+
+.recommendation-output,
+.context-section,
+.related-disease-grid {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .recommendation-empty,
@@ -755,6 +764,16 @@ main {
 .risk-list li > span { display: grid; flex: 0 0 18px; height: 18px; place-items: center; border-radius: 50%; color: #913e46; background: var(--rose-pale); font-size: 8px; font-weight: 800; }
 .risk-list li.neutral > span { color: #7f631d; background: var(--amber-pale); }
 .risk-list p { margin: 1px 0 0; }
+.risk-list li > div { min-width: 0; }
+.risk-list li small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: 7px; font-weight: 700; }
+.risk-list li.ai-review-question > span { color: #3e609f; background: var(--blue-pale); font-size: 6px; }
+.risk-list li.ai-review-question { padding-top: 9px; border-top: 1px solid var(--line); }
+.risk-list li.ai-review-question small { color: var(--ink-soft); font-weight: 500; line-height: 1.45; }
+.question-basis { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 5px; }
+.question-basis em { padding: 3px 5px; border-radius: 5px; color: #3e609f; background: var(--blue-pale); font-size: 7px; font-style: normal; font-weight: 750; }
+.question-basis .llm-citations { margin-top: 0; }
+.ai-question-status { margin: 10px 0 0; color: var(--ink-faint); font-size: 7px; line-height: 1.45; }
+.ai-question-status.complete { color: var(--green-dark); }
 
 .llm-synthesis {
   position: relative;
@@ -973,6 +992,29 @@ main {
 .context-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .context-card .pill { max-width: 125px; }
 .inactive-program-card { border-left: 3px solid var(--amber); }
+
+.related-disease-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 17px; }
+.related-disease-card {
+  min-width: 0;
+  max-width: 100%;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 10px;
+  background: white;
+}
+.related-disease-card h5 { margin: 11px 0 0; font-family: Georgia, serif; font-size: 16px; font-weight: 500; }
+.related-disease-card > p { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--ink-soft); font-size: 8px; line-height: 1.55; }
+.relationship-pill { padding: 4px 7px; border-radius: 999px; color: #31598a; background: #e9f1fb; font-size: 7px; font-weight: 800; }
+.related-programs { overflow-wrap: anywhere; }
+.related-trial-list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.related-trial-list li { display: flex; min-width: 0; justify-content: space-between; gap: 14px; align-items: center; padding: 9px 10px; border-radius: 8px; background: #f7faf9; }
+.related-trial-list div { min-width: 0; }
+.related-trial-list strong { display: block; overflow-wrap: anywhere; color: var(--ink); font-size: 8px; line-height: 1.4; }
+.related-trial-list span { display: block; margin-top: 3px; color: var(--ink-faint); font-size: 7px; }
+.related-trial-list small { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--ink-soft); font-size: 7px; line-height: 1.4; }
+.related-trial-list a { flex: 0 0 auto; color: var(--green); font-size: 8px; font-weight: 800; text-decoration: none; }
+.related-disease-card .related-trial-note { color: var(--ink-faint); font-style: italic; }
 
 .limitations { margin-top: 22px; color: #675328; background: var(--amber-pale); border-color: #ead3a8; }
 .limitations strong { font-size: 9px; }

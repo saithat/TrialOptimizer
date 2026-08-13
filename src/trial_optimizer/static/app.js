@@ -4,6 +4,7 @@ const state = {
   analogs: [],
   sources: [],
   filterTimer: null,
+  recommendationJobId: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -66,8 +67,8 @@ function renderOverview(data) {
     Number(metrics.result_coverage_percent) % 1 ? 1 : 0,
   );
   $("#trialsWithResults").textContent = formatNumber(metrics.trials_with_results);
-  $("#analogCount").textContent = formatNumber(metrics.analog_relationships);
-  $("#unresolvedAnalogs").textContent = formatNumber(metrics.unresolved_analogs);
+  $("#analogCount").textContent = formatNumber(metrics.program_comparisons ?? metrics.analog_relationships);
+  $("#savedPrograms").textContent = formatNumber(metrics.convoke_program_snapshots ?? 0);
   $("#sourceDocuments").textContent = formatNumber(metrics.source_documents);
   $("#pendingReviews").textContent = formatNumber(metrics.pending_reviews);
 
@@ -162,7 +163,7 @@ function renderTrials(data) {
 function renderAnalogs(items) {
   const grid = $("#analogGrid");
   if (!items.length) {
-    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No comparisons yet</strong><p>Import a Convoke export to compare development programs.</p></div></div>`;
+    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No comparisons yet</strong><p>Import Program Tracker records containing the same drug in two or more indications.</p></div></div>`;
     return;
   }
   grid.innerHTML = items
@@ -171,12 +172,16 @@ function renderAnalogs(items) {
         .slice(0, 4)
         .map(([name, score]) => `<span class="dimension-chip">${escapeHtml(humanize(name))} ${Math.round(Number(score) * 100)}%</span>`)
         .join("");
+      const basis = (item.comparison_basis || [])
+        .slice(0, 4)
+        .map((label) => `<span class="dimension-chip">${escapeHtml(label)}</span>`)
+        .join("");
       const score = item.overall_score == null ? "—" : Math.round(Number(item.overall_score) * 100);
       return `
         <article class="analog-card">
           <div class="analog-card-top">
             <span class="source-tag">${escapeHtml(item.source_system)}</span>
-            <span class="analog-score">${score}<small>${score === "—" ? "" : "% match"}</small></span>
+            ${score === "—" ? `<span class="analog-score"><small>Saved comparison</small></span>` : `<span class="analog-score">${score}<small>% match</small></span>`}
           </div>
           <div class="analog-pair">
             <span class="analog-name" title="${escapeHtml(item.anchor_label)}">${escapeHtml(item.anchor_label)}</span>
@@ -184,7 +189,7 @@ function renderAnalogs(items) {
             <span class="analog-name" title="${escapeHtml(item.analog_label)}">${escapeHtml(item.analog_label)}</span>
           </div>
           <p>${escapeHtml(item.rationale || "No rationale supplied by the source.")}</p>
-          <div class="dimension-list">${dimensions || `<span class="dimension-chip">No dimension scores</span>`}</div>
+          <div class="dimension-list">${basis || dimensions || `<span class="dimension-chip">Comparison details unavailable</span>`}</div>
           <div style="margin-top:14px"><span class="resolution-tag ${escapeHtml(item.resolution_status)}">${escapeHtml(humanize(item.resolution_status))}</span></div>
         </article>`;
     })
@@ -315,6 +320,52 @@ function renderInactivePrograms(items) {
     .join("");
 }
 
+function renderRelatedDiseases(items) {
+  if (!items?.length) {
+    return emptyEvidence("No other indications connected by the same drug or a shared target were found in the cached Convoke landscape.");
+  }
+  return items
+    .map((item) => {
+      const relationship = item.relationship_kind === "same_drug_cross_indication"
+        ? "Same drug"
+        : "Shared target";
+      const bases = (item.relationship_basis || [])
+        .map((basis) => `<span>${escapeHtml(basis)}</span>`)
+        .join("");
+      const programs = (item.programs || [])
+        .map((program) => `${program.drug} · ${program.stage} · ${program.status}`)
+        .join("; ");
+      const trials = (item.trials || [])
+        .map(
+          (trial) => `
+            <li>
+              <div>
+                <strong>${escapeHtml(trial.title || "Untitled trial")}</strong>
+                <span>${escapeHtml(trial.nct_id)}${trial.phase ? ` · ${escapeHtml(trial.phase)}` : ""}</span>
+                <small>${escapeHtml(trial.summary || "No compact trial summary is available.")}</small>
+              </div>
+              ${citationLink(trial.registry_url, "Open registry")}
+            </li>`,
+        )
+        .join("");
+      const hiddenCount = Math.max(0, Number(item.trial_count_returned || 0) - (item.trials || []).length);
+      return `
+        <article class="related-disease-card">
+          <div class="context-card-top">
+            <span class="source-tag">Convoke Program Tracker</span>
+            <span class="relationship-pill">${escapeHtml(relationship)}</span>
+          </div>
+          <h5>${escapeHtml(item.indication)}</h5>
+          <p>${escapeHtml(item.summary || "No linked-trial summary is available.")}</p>
+          <div class="causal-tags">${bases}</div>
+          <p class="related-programs"><strong>${formatNumber(item.program_count)} program${item.program_count === 1 ? "" : "s"}</strong>${programs ? ` · ${escapeHtml(programs)}` : ""}</p>
+          <ul class="related-trial-list">${trials || "<li><span>No linked NCT records were returned.</span></li>"}</ul>
+          ${hiddenCount ? `<p class="related-trial-note">${formatNumber(hiddenCount)} additional returned trial${hiddenCount === 1 ? "" : "s"} omitted from this compact view.</p>` : ""}
+        </article>`;
+    })
+    .join("");
+}
+
 function renderLLMCitations(citationIds, llm) {
   const index = llm.citation_index || {};
   return (citationIds || [])
@@ -354,6 +405,13 @@ function renderLLMSynthesis(llm) {
         <div><strong>AI review is off</strong><p>The rules-based comparison and source links are still available.</p></div>
       </section>`;
   }
+  if (llm.status === "pending") {
+    return `
+      <section class="llm-fallback">
+        <span aria-hidden="true">✦</span>
+        <div><strong>AI summary is still running</strong><p>${escapeHtml(llm.message || "The design and evidence are ready to review now.")}</p></div>
+      </section>`;
+  }
   if (llm.status !== "enhanced" || !llm.output) {
     return `
       <section class="llm-fallback warning">
@@ -376,9 +434,6 @@ function renderLLMSynthesis(llm) {
     )
     .join("");
   const gaps = (output.evidence_gaps || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
-  const questions = (output.expert_review_questions || [])
-    .map((item) => `<li>${escapeHtml(item)}</li>`)
-    .join("");
 
   return `
     <section class="llm-synthesis">
@@ -409,7 +464,7 @@ function renderLLMSynthesis(llm) {
       </div>
       <div class="llm-review-grid">
         <section><h5>Missing information</h5><ul>${gaps || "<li>No additional missing information identified.</li>"}</ul></section>
-        <section><h5>Questions for reviewers</h5><ul>${questions || "<li>No additional question generated.</li>"}</ul></section>
+        <section><h5>Questions for reviewers</h5><ul><li>${(output.expert_review_questions || []).length ? "AI-added questions appear in the main review panel above." : "No additional AI question was supported."}</li></ul></section>
       </div>
       <footer class="llm-footer">
         <span>${llm.included_convoke_context ? "Convoke records used" : "Convoke records not sent to AI"}</span>
@@ -418,11 +473,61 @@ function renderLLMSynthesis(llm) {
     </section>`;
 }
 
+function normalizedQuestionTokens(value) {
+  return new Set(String(value || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((token) => token.length > 3));
+}
+
+function questionsOverlap(first, second) {
+  const left = normalizedQuestionTokens(first);
+  const right = normalizedQuestionTokens(second);
+  if (!left.size || !right.size) return false;
+  const shared = [...left].filter((token) => right.has(token)).length;
+  return shared / Math.min(left.size, right.size) >= 0.55;
+}
+
+function appendAIReviewQuestions(llm) {
+  const list = $("#recommendationQuestionList");
+  const status = $("#aiQuestionStatus");
+  if (!list || !status) return;
+  if (llm.status !== "enhanced" || !llm.output) {
+    status.textContent = "AI did not add questions; the immediate checks remain available.";
+    status.classList.add("complete");
+    return;
+  }
+  const initialQuestions = [...list.querySelectorAll("li[data-question]")]
+    .map((item) => item.dataset.question || "");
+  const additions = (llm.output.expert_review_questions || [])
+    .map((item) => typeof item === "string"
+      ? { question: item, basis: "Generated from the supplied review context.", basis_kind: "evidence_gap", citation_ids: [] }
+      : item)
+    .filter((item) => item.question && !initialQuestions.some((question) => questionsOverlap(question, item.question)));
+
+  if (!additions.length) {
+    status.textContent = "AI review found no additional non-duplicate questions.";
+    status.classList.add("complete");
+    return;
+  }
+  list.insertAdjacentHTML("beforeend", additions.map((item) => `
+    <li class="ai-review-question" data-question="${escapeHtml(item.question)}">
+      <span>AI</span>
+      <div>
+        <p>${escapeHtml(item.question)}</p>
+        <small>${escapeHtml(item.basis || "No basis supplied.")}</small>
+        <div class="question-basis">
+          <em>${item.basis_kind === "evidence" ? "Saved evidence" : "Evidence gap"}</em>
+          ${renderLLMCitations(item.citation_ids || [], llm)}
+        </div>
+      </div>
+    </li>`).join(""));
+  status.textContent = `${additions.length} AI-added question${additions.length === 1 ? "" : "s"} added.`;
+  status.classList.add("complete");
+}
+
 function renderRecommendation(data) {
   const recommendation = data.recommendation;
   const sample = recommendation.sample_size_benchmark;
   const endpoints = recommendation.primary_endpoint_candidates || [];
-  const risks = recommendation.risk_flags || [];
+  const questions = recommendation.risk_flags || [];
   const evidence = data.evidence || {};
   const endpointMarkup = endpoints.length
     ? endpoints
@@ -436,9 +541,9 @@ function renderRecommendation(data) {
         )
         .join("")
     : `<li><span>No recurring primary endpoint found</span><small>Define the endpoint with clinical and statistical review.</small></li>`;
-  const riskMarkup = risks.length
-    ? risks.map((risk) => `<li><span>!</span><p>${escapeHtml(risk.message)}</p></li>`).join("")
-    : `<li class="neutral"><span>i</span><p>No reviewed failure factors were available; risk identification remains incomplete.</p></li>`;
+  const questionMarkup = questions.length
+    ? questions.map((question) => `<li data-question="${escapeHtml(question.message)}"><span>?</span><div><p>${escapeHtml(question.message)}</p><small>Immediate check</small></div></li>`).join("")
+    : `<li class="neutral"><span>i</span><p>No review questions were generated. Confirm the evidence and statistical plan before proceeding.</p></li>`;
 
   $("#recommendationOutput").innerHTML = `
     <header class="recommendation-header">
@@ -476,15 +581,16 @@ function renderRecommendation(data) {
     </div>
     <div class="recommendation-notes">
       <section>
-        <h4>Why this design</h4>
+        <h4>What supports this design</h4>
         <ul>${(recommendation.rationale || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       </section>
       <section>
         <h4>Questions to review</h4>
-        <ul class="risk-list">${riskMarkup}</ul>
+        <ul class="risk-list" id="recommendationQuestionList">${questionMarkup}</ul>
+        <p class="ai-question-status" id="aiQuestionStatus">${data.llm?.status === "pending" ? "AI is checking for additional evidence-based questions…" : ""}</p>
       </section>
     </div>
-    ${renderLLMSynthesis(data.llm)}
+    <div id="recommendationAiSlot">${renderLLMSynthesis(data.llm)}</div>
     <section class="evidence-section">
       <div class="evidence-heading"><div><p class="section-label">Related trials</p><h4>Reviewed outcomes</h4></div><span>Human-reviewed labels only</span></div>
       <div class="evidence-columns">
@@ -493,13 +599,53 @@ function renderRecommendation(data) {
       </div>
     </section>
     <section class="evidence-section context-section">
-      <div class="evidence-heading"><div><p class="section-label">Other related records</p><h4>Active, completed, and discontinued programs</h4></div><span>Status is not outcome</span></div>
+      <div class="evidence-heading"><div><p class="section-label">Convoke cross-indication context</p><h4>Related diseases and their linked trials</h4></div><span>Same drug or shared target · not outcome transfer</span></div>
+      <div class="related-disease-grid">${renderRelatedDiseases(evidence.related_diseases)}</div>
+    </section>
+    <section class="evidence-section context-section">
+      <div class="evidence-heading"><div><p class="section-label">Other related records</p><h4>Current-indication trial and program context</h4></div><span>Status is not outcome</span></div>
       <div class="context-group"><h5>Active trials</h5><div class="context-grid">${renderContextEvidence(evidence.active, "active")}</div></div>
       <div class="context-group"><h5>Completed trials · outcome-neutral unless reviewed</h5><div class="context-grid">${renderContextEvidence(evidence.completed, "completed")}</div></div>
       <div class="context-group"><h5>Inactive or discontinued programs</h5><div class="context-grid">${renderInactivePrograms(evidence.inactive_programs)}</div></div>
       <div class="context-group"><h5>Additional trials without reviewed outcomes</h5><div class="context-grid">${renderContextEvidence(evidence.unassessed_context, "unassessed")}</div></div>
     </section>
     <div class="limitations"><strong>Limits</strong><ul>${(data.limitations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+}
+
+async function pollRecommendationAI(jobId) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    if (state.recommendationJobId !== jobId) return;
+    let llm;
+    try {
+      llm = await request(`/api/recommendations/ai/${encodeURIComponent(jobId)}`);
+    } catch (error) {
+      const slot = $("#recommendationAiSlot");
+      if (slot && state.recommendationJobId === jobId) {
+        slot.innerHTML = renderLLMSynthesis({
+          status: "fallback",
+          message: `The separate AI summary could not be loaded. ${error.message}`,
+        });
+        appendAIReviewQuestions({status: "fallback"});
+      }
+      return;
+    }
+    if (llm.status === "pending") continue;
+    const slot = $("#recommendationAiSlot");
+    if (slot && state.recommendationJobId === jobId) {
+      slot.innerHTML = renderLLMSynthesis(llm);
+      appendAIReviewQuestions(llm);
+    }
+    return;
+  }
+  const slot = $("#recommendationAiSlot");
+  if (slot && state.recommendationJobId === jobId) {
+    slot.innerHTML = renderLLMSynthesis({
+      status: "fallback",
+      message: "The design is ready, but the AI summary is taking longer than expected.",
+    });
+    appendAIReviewQuestions({status: "fallback"});
+  }
 }
 
 async function generateRecommendation(event) {
@@ -516,6 +662,7 @@ async function generateRecommendation(event) {
   $("#recommendationOutput").classList.add("hidden");
   $("#recommendationLoading").classList.remove("hidden");
   submit.disabled = true;
+  state.recommendationJobId = null;
   try {
     const data = await request("/api/recommendations", {
       method: "POST",
@@ -524,6 +671,10 @@ async function generateRecommendation(event) {
     });
     renderRecommendation(data);
     $("#recommendationOutput").classList.remove("hidden");
+    if (data.llm?.status === "pending" && data.llm.job_id) {
+      state.recommendationJobId = data.llm.job_id;
+      pollRecommendationAI(data.llm.job_id).catch(console.error);
+    }
   } catch (error) {
     $("#recommendationOutput").innerHTML = `<div class="recommendation-error"><strong>Could not compare trial designs</strong><p>${escapeHtml(error.message)}</p></div>`;
     $("#recommendationOutput").classList.remove("hidden");

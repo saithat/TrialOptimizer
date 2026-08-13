@@ -1,10 +1,10 @@
-import type { DecisionEvidence, EvidenceRecord, Finding, ProtocolSection, ScenarioMetric } from './types'
+import type { DecisionEvidence, EvidenceRecord, Finding, ProtocolSection } from './types'
 
 export const demoProtocol: ProtocolSection[] = [
   {
     id: 'synopsis',
     label: 'Protocol synopsis',
-    text: 'ORBIT-201 is a synthetic demonstration protocol for a randomized Phase 2 study of fictional orvamerib plus pembrolizumab versus pembrolizumab alone in adults with metastatic, MET-altered non-small cell lung cancer.',
+    text: 'ORBIT-201 is a sample protocol for a randomized Phase 2 study of fictional orvamerib plus pembrolizumab versus pembrolizumab alone in adults with metastatic, MET-altered non-small cell lung cancer.',
   },
   {
     id: 'objective',
@@ -119,7 +119,7 @@ export const evidenceRecords: EvidenceRecord[] = [
     reason: 'The registry reports insufficient tolerability in the combination arm versus pembrolizumab alone.',
     result: 'The study stopped early; the public registry attributes the decision to combination-arm tolerability.',
     relevance: 'Same disease, phase, immunotherapy backbone, and MET-directed combination.',
-    relevanceLabel: 'Closest combination analog',
+    relevanceLabel: 'Closest combination match',
     analogs: ['NSCLC', 'MET target', 'PD-1 backbone', 'Phase 2', 'Combination'],
     sources: [
       { label: 'ClinicalTrials.gov', kind: 'Registry', url: 'https://clinicaltrials.gov/study/NCT04139317' },
@@ -191,7 +191,7 @@ export const evidenceRecords: EvidenceRecord[] = [
     actualEnrollment: 1118,
     reason: 'Neither durvalumab alone nor durvalumab plus tremelimumab met the prespecified primary survival endpoints.',
     result: 'The combination did not improve OS or PFS versus chemotherapy in the PD-L1 ≥25% primary analysis population.',
-    relevance: 'Same disease and checkpoint-combination logic with a different partner target; useful for endpoint, biomarker, and multiplicity design analogies.',
+    relevance: 'Same disease and checkpoint-combination design with a different partner target; useful for reviewing endpoints, biomarkers, and multiplicity.',
     relevanceLabel: 'Same disease + strategy',
     analogs: ['NSCLC', 'Checkpoint combination', 'Phase 3', 'PD-L1 ≥25%', 'Randomized'],
     sources: [
@@ -398,7 +398,7 @@ export const demoFindings: Finding[] = [
     confidence: 'High',
     sourceIds: ['geometry-mono1', 'vision-tepotinib', 'nivolumab-combinations', 'tepotinib-cns'],
     supportIds: ['fda-performance-status-2026', 'nsclc-broadened-eligibility', 'ctti-recruitment-framework'],
-    evidenceLabel: '4 analogs · 3 source briefs',
+    evidenceLabel: '4 similar trials · 3 references',
   },
   {
     id: 'combination-tolerability',
@@ -412,7 +412,7 @@ export const demoFindings: Finding[] = [
     confidence: 'High',
     sourceIds: ['geometry-mono1', 'vision-tepotinib', 'capmatinib-pembro', 'keynote-189'],
     supportIds: ['capmatinib-pembro-results', 'fda-ind-safety-elements', 'fda-oncology-dosing-toolkit'],
-    evidenceLabel: '4 analogs · 3 source briefs',
+    evidenceLabel: '4 similar trials · 3 references',
   },
   {
     id: 'renal-threshold',
@@ -426,7 +426,7 @@ export const demoFindings: Finding[] = [
     confidence: 'Needs review',
     sourceIds: [],
     supportIds: ['fda-organ-dysfunction', 'asco-friends-organ-function', 'nsclc-broadened-eligibility'],
-    evidenceLabel: '3 source briefs',
+    evidenceLabel: '3 references',
   },
   {
     id: 'visit-burden',
@@ -440,7 +440,7 @@ export const demoFindings: Finding[] = [
     confidence: 'Moderate',
     sourceIds: [],
     supportIds: ['fda-decentralized-elements', 'protocol-design-performance', 'burden-and-withdrawal', 'phase2-time-burden'],
-    evidenceLabel: '4 source briefs',
+    evidenceLabel: '4 references',
   },
   {
     id: 'endpoint-handling',
@@ -454,12 +454,6 @@ export const demoFindings: Finding[] = [
     confidence: 'High',
     sourceIds: ['keynote-024', 'keynote-189', 'checkmate-026', 'mystic'],
     supportIds: ['fda-e9r1-estimands', 'national-academies-missing-data', 'nonresponder-imputation-simulation'],
-    evidenceLabel: '4 analogs · 3 source briefs',
+    evidenceLabel: '4 similar trials · 3 references',
   },
-]
-
-export const scenarioMetrics: ScenarioMetric[] = [
-  { label: 'Candidate pool index', before: '100', after: '118', direction: 'up' },
-  { label: 'Enrollment estimate', before: '17.8 mo', after: '15.1 mo', direction: 'down' },
-  { label: 'Screen-failure index', before: '100', after: '84', direction: 'down' },
 ]

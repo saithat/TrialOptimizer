@@ -687,6 +687,36 @@ button {
   white-space: nowrap;
 }
 
+.server-review-note {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  color: #536a74;
+  background: #f4f7f8;
+  border: 1px solid #dce5e8;
+  border-radius: 6px;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.server-review-note b {
+  color: #234a58;
+  font-size: 9.5px;
+}
+
+.server-review-note small {
+  color: #778990;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 7.5px;
+}
+
+.server-review-note.status-enhanced {
+  background: #eef7f3;
+  border-color: #cfe4da;
+}
+
 .signal-track {
   height: 4px;
   display: flex;
@@ -1198,6 +1228,10 @@ button {
   border-left-color: var(--amber);
 }
 
+.evidence-card.outcome-unassessed {
+  border-left-color: #8d9aa0;
+}
+
 .evidence-card-top {
   justify-content: space-between;
   margin-bottom: 7px;
@@ -1249,6 +1283,11 @@ button {
 .outcome-badge.outcome-stopped {
   color: #8f6110;
   background: var(--amber-soft);
+}
+
+.outcome-badge.outcome-unassessed {
+  color: #586970;
+  background: #e9eef0;
 }
 
 .analog-tags {
@@ -1697,6 +1736,7 @@ button {
 .analogy-key .key-success { background: #2f956f; }
 .analogy-key .key-miss { background: #d0624a; }
 .analogy-key .key-stopped { background: #c78b2a; }
+.analogy-key .key-review { background: #8d9aa0; }
 
 .evidence-table {
   max-width: 1260px;
@@ -1738,6 +1778,7 @@ button {
 .evidence-table-row.outcome-success { border-left-color: #2f956f; }
 .evidence-table-row.outcome-endpoint-miss { border-left-color: #d0624a; }
 .evidence-table-row.outcome-stopped { border-left-color: #c78b2a; }
+.evidence-table-row.outcome-unassessed { border-left-color: #8d9aa0; }
 
 .evidence-table-row:last-child {
   border-bottom: 0;

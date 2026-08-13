@@ -74,6 +74,16 @@ Convoke is one provider of analog assertions. A reproducible in-house model can 
 6. **Review** contradictions, low-confidence matches, and high-impact causal assessments.
 7. **Serve** analog cohorts, design comparisons, timelines, and model-ready feature snapshots.
 
+## Protocol review flow
+
+The protocol reviewer is part of the same FastAPI application and PostgreSQL database as the trial
+dashboard. For an NCT review, the browser asks FastAPI for the current ClinicalTrials.gov record and
+runs the local rule checks. It then submits the structured sections and findings to
+`/api/protocol-reviews`. The backend retrieves matching saved trials, runs optional structured model
+analysis, validates every model citation and quoted protocol span, and saves the request, evidence
+snapshot, output, and later review decisions. If the database or model is unavailable, the local
+rule findings remain usable.
+
 ## Recommended production services
 
 - PostgreSQL for the normalized/evidence store.

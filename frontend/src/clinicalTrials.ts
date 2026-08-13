@@ -1,4 +1,11 @@
-import type { Finding, NctReview, ProtocolSection, TrialProfile } from './types'
+import type {
+  Finding,
+  NctReview,
+  ProtocolReviewHistoryItem,
+  ProtocolReviewResult,
+  ProtocolSection,
+  TrialProfile,
+} from './types'
 import { evidenceRecords } from './data'
 
 interface Outcome {
@@ -111,7 +118,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
   const locations = protocol?.contactsLocationsModule?.locations ?? []
   const nctId = identification?.nctId
 
-  if (!nctId || !identification?.briefTitle) throw new Error('The public record is missing the fields Trialy needs to review it.')
+  if (!nctId || !identification?.briefTitle) throw new Error('The public record is missing the fields needed for review.')
 
   const phase = listLabel((design?.phases ?? []).map(sentenceCase), 'Phase not specified')
   const interventionNames = interventions.map((item) => item.name).filter((name): name is string => Boolean(name))
@@ -186,7 +193,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'Moderate',
       sourceIds: analogIds.slice(0, 3),
       supportIds: ['nsclc-broadened-eligibility', 'protocol-design-performance', 'ctti-recruitment-framework'],
-      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} analogs · ` : ''}3 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} similar trials · ` : ''}3 references`,
     })
   }
 
@@ -203,7 +210,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'High',
       sourceIds: analogIds.slice(0, 3),
       supportIds: ['fda-performance-status-2026', 'nsclc-broadened-eligibility'],
-      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -220,7 +227,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'Needs review',
       sourceIds: analogIds.slice(0, 3),
       supportIds: ['fda-organ-dysfunction', 'asco-friends-organ-function', 'nsclc-broadened-eligibility'],
-      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} analogs · ` : ''}3 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} similar trials · ` : ''}3 references`,
     })
   }
 
@@ -237,7 +244,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'Moderate',
       sourceIds: analogIds.slice(0, 3),
       supportIds: ['protocol-design-performance', 'ctti-recruitment-framework'],
-      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${Math.min(3, analogIds.length)} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -255,7 +262,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'Moderate',
       sourceIds: analogIds,
       supportIds: ['fda-ind-safety-elements', 'fda-oncology-dosing-toolkit'],
-      evidenceLabel: `${analogIds.length ? `${analogIds.length} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${analogIds.length} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -272,7 +279,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'High',
       sourceIds: analogIds,
       supportIds: ['fda-e9r1-estimands', 'national-academies-missing-data'],
-      evidenceLabel: `${analogIds.length ? `${analogIds.length} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${analogIds.length} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -291,7 +298,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'High',
       sourceIds: analogIds,
       supportIds: ['fda-e9r1-estimands', 'national-academies-missing-data'],
-      evidenceLabel: `${analogIds.length ? `${analogIds.length} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${analogIds.length} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -312,7 +319,7 @@ function buildReview(study: ClinicalTrialsStudy): NctReview {
       confidence: 'Moderate',
       sourceIds: analogIds,
       supportIds: ['ctti-recruitment-framework', 'protocol-design-performance'],
-      evidenceLabel: `${analogIds.length ? `${analogIds.length} analogs · ` : ''}2 source briefs`,
+      evidenceLabel: `${analogIds.length ? `${analogIds.length} similar trials · ` : ''}2 references`,
     })
   }
 
@@ -360,4 +367,68 @@ export async function fetchNctReview(input: string): Promise<NctReview> {
   if (!response.ok) throw new Error(`ClinicalTrials.gov returned ${response.status}. Try again in a moment.`)
 
   return buildReview(await response.json() as ClinicalTrialsStudy)
+}
+
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await response.json() as { detail?: string }
+    return new Error(body.detail || fallback)
+  } catch {
+    return new Error(fallback)
+  }
+}
+
+export async function submitProtocolReview({
+  sourceType,
+  title,
+  sections,
+  findings,
+  profile,
+}: {
+  sourceType: 'nct' | 'text' | 'demo'
+  title: string
+  sections: ProtocolSection[]
+  findings: Finding[]
+  profile?: TrialProfile | null
+}): Promise<ProtocolReviewResult> {
+  const response = await fetch('/api/protocol-reviews', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      source_type: sourceType,
+      nct_id: profile?.nctId ?? null,
+      title,
+      sections,
+      findings,
+      profile: profile ?? null,
+    }),
+  })
+  if (!response.ok) throw await responseError(response, 'The protocol review could not be completed.')
+  return response.json() as Promise<ProtocolReviewResult>
+}
+
+export async function fetchProtocolReviewHistory(): Promise<ProtocolReviewHistoryItem[]> {
+  const response = await fetch('/api/protocol-reviews?limit=30', { headers: { Accept: 'application/json' } })
+  if (!response.ok) return []
+  return response.json() as Promise<ProtocolReviewHistoryItem[]>
+}
+
+export async function saveProtocolReviewDecision({
+  reviewId,
+  finding,
+}: {
+  reviewId: number
+  finding: Finding
+}): Promise<void> {
+  const response = await fetch(`/api/protocol-reviews/${reviewId}/decisions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      finding_id: finding.id,
+      decision: finding.replacement ? 'accepted' : 'team_review',
+      original_text: finding.phrase,
+      replacement_text: finding.replacement ?? null,
+    }),
+  })
+  if (!response.ok) throw await responseError(response, 'The review decision could not be saved.')
 }
