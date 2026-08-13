@@ -1,2 +1,0 @@
-source_record_id,anchor_name,anchor_type,analog_name,analog_type,overall_score,dimensions_json,rationale,source_url,as_of_date
-example-001,Anchor Drug,asset,Analog Drug,asset,0.84,"{""target"":0.95,""modality"":0.90,""indication"":0.71}",Shared target and modality; related disease setting,https://www.convoke.bio/,2026-08-13

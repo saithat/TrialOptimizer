@@ -274,6 +274,7 @@ class Repository:
                 """
                 INSERT INTO trial_arm (trial_version_id, label, arm_type, description)
                 VALUES (%s, %s, %s, %s)
+                ON CONFLICT (trial_version_id, label) DO NOTHING
                 """,
                 (trial_version_id, arm.label, arm.arm_type, arm.description),
             )
@@ -286,6 +287,7 @@ class Repository:
                     description, arm_labels, other_names
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trial_version_id, intervention_type, source_name) DO NOTHING
                 """,
                 (
                     trial_version_id,

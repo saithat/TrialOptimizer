@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Evidence-first clinical trial intelligence and analog discovery dashboard."
+      content="Review clinical trials, outcomes, similar programs, and source records."
     />
     <title>Trial Optimizer</title>
     <link rel="stylesheet" href="/static/styles.css" />
@@ -23,35 +23,34 @@
         <a class="active" href="#overview">Overview</a>
         <a href="#design">Design a trial</a>
         <a href="#trials">Trials</a>
-        <a href="#analogs">Analogs</a>
+        <a href="#analogs">Similar programs</a>
         <a href="#evidence">Evidence</a>
       </nav>
 
     </header>
-
     <main id="top">
       <section class="hero" id="overview">
         <div class="hero-copy">
-          <p class="eyebrow">Clinical development intelligence</p>
-          <h1>See what happened.<br /><span>Understand why.</span></h1>
+          <p class="eyebrow">Clinical trial data</p>
+          <h1>Compare trial designs.<br /><span>Review the outcomes.</span></h1>
           <p class="hero-description">
-            Compare trial designs, analog programs, and outcome evidence without turning registry
-            status into false certainty.
+            Review similar trials, their designs, and their reported outcomes. Registry status is
+            shown separately from reviewed results.
           </p>
         </div>
         <div class="hero-note">
           <div class="note-icon" aria-hidden="true">i</div>
           <div>
-            <strong>Evidence-first by design</strong>
-            <p>Trial conduct, endpoint results, and program disposition remain separate.</p>
+            <strong>How outcomes are labeled</strong>
+            <p>A completed trial is not called successful or failed until its results are reviewed.</p>
           </div>
         </div>
       </section>
 
-      <section class="metrics" aria-label="Trial landscape metrics">
+      <section class="metrics" aria-label="Trial summary">
         <article class="metric-card">
           <div class="metric-topline">
-            <span>Trials mapped</span>
+            <span>Trials in database</span>
             <span class="metric-icon cool" aria-hidden="true">↗</span>
           </div>
           <strong class="metric-value" id="totalTrials">—</strong>
@@ -59,7 +58,7 @@
         </article>
         <article class="metric-card">
           <div class="metric-topline">
-            <span>Result coverage</span>
+            <span>Trials with results</span>
             <span class="metric-icon green" aria-hidden="true">✓</span>
           </div>
           <strong class="metric-value"><span id="resultCoverage">—</span><small>%</small></strong>
@@ -67,15 +66,15 @@
         </article>
         <article class="metric-card">
           <div class="metric-topline">
-            <span>Analog links</span>
+            <span>Trial comparisons</span>
             <span class="metric-icon purple" aria-hidden="true">⌁</span>
           </div>
           <strong class="metric-value" id="analogCount">—</strong>
-          <p><span id="unresolvedAnalogs">—</span> awaiting resolution</p>
+          <p><span id="unresolvedAnalogs">—</span> not yet reviewed</p>
         </article>
         <article class="metric-card">
           <div class="metric-topline">
-            <span>Evidence library</span>
+            <span>Source documents</span>
             <span class="metric-icon amber" aria-hidden="true">▤</span>
           </div>
           <strong class="metric-value" id="sourceDocuments">—</strong>
@@ -87,7 +86,7 @@
         <article class="panel landscape-panel">
           <header class="panel-header">
             <div>
-              <p class="section-label">Registry landscape</p>
+              <p class="section-label">Registry records</p>
               <h2>Trial status distribution</h2>
             </div>
             <span class="panel-badge">Live database</span>
@@ -98,7 +97,7 @@
         <article class="panel outcome-panel">
           <header class="panel-header">
             <div>
-              <p class="section-label">Reviewed intelligence</p>
+              <p class="section-label">Reviewed results</p>
               <h2>Outcome assessments</h2>
             </div>
           </header>
@@ -112,14 +111,14 @@
       <section class="section-block design-section" id="design">
         <header class="section-header">
           <div>
-            <p class="section-label">Evidence-guided planning</p>
-            <h2>Build a trial design starting point</h2>
+            <p class="section-label">Trial design</p>
+            <h2>Compare possible trial designs</h2>
             <p>
-              Enter an asset and disease to benchmark design patterns against analog trials and
-              programs.
+              Enter a drug and disease. The tool uses similar trials to suggest design options and
+              points that need review.
             </p>
           </div>
-          <span class="result-count">Decision support</span>
+          <span class="result-count">For research use</span>
         </header>
 
         <div class="design-shell">
@@ -127,8 +126,8 @@
             <div class="design-form-heading">
               <span class="design-form-icon" aria-hidden="true">✦</span>
               <div>
-                <strong>Program brief</strong>
-                <p>Drug and disease are required. Add context when known.</p>
+                <strong>Trial inputs</strong>
+                <p>Drug and disease are required. Add other details when known.</p>
               </div>
             </div>
             <div class="form-grid">
@@ -166,23 +165,23 @@
               <p>Only reviewed assessments are called success or failure. Completed registry records remain neutral.</p>
             </div>
             <button class="primary-button" id="designSubmit" type="submit">
-              Generate design recommendation <span aria-hidden="true">→</span>
+              Compare trial designs <span aria-hidden="true">→</span>
             </button>
           </form>
 
           <div class="design-result" id="designResult" aria-live="polite">
             <div class="recommendation-empty" id="recommendationEmpty">
               <span class="recommendation-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
-              <strong>Your evidence brief will appear here</strong>
+              <strong>Results will appear here</strong>
               <p>
-                The recommendation will include design benchmarks, endpoint candidates, risk flags,
-                and source-linked successful, failed, active, inactive, and completed context.
+                Results include a suggested design, possible endpoints, issues to review, and links
+                to related trial records.
               </p>
             </div>
             <div class="recommendation-loading hidden" id="recommendationLoading">
               <span class="loading-ring" aria-hidden="true"></span>
               <strong>Comparing relevant programs…</strong>
-              <p>Separating reviewed outcomes from registry and tracker context.</p>
+              <p>Checking reviewed outcomes separately from registry status.</p>
             </div>
             <div class="recommendation-output hidden" id="recommendationOutput"></div>
           </div>
@@ -192,7 +191,7 @@
       <section class="section-block" id="trials">
         <header class="section-header">
           <div>
-            <p class="section-label">Trial explorer</p>
+            <p class="section-label">Trial search</p>
             <h2>Find comparable studies</h2>
             <p>Search across titles, conditions, sponsors, and NCT identifiers.</p>
           </div>
@@ -245,9 +244,9 @@
       <section class="section-block" id="analogs">
         <header class="section-header">
           <div>
-            <p class="section-label">Analog intelligence</p>
-            <h2>Comparable development programs</h2>
-            <p>Similarity assertions remain linked to their source and resolution state.</p>
+            <p class="section-label">Similar programs</p>
+            <h2>Program comparisons</h2>
+            <p>Each comparison shows its source and review status.</p>
           </div>
         </header>
         <div class="analog-grid" id="analogGrid"></div>
@@ -256,9 +255,9 @@
       <section class="section-block" id="evidence">
         <header class="section-header">
           <div>
-            <p class="section-label">Evidence provenance</p>
-            <h2>Connected source systems</h2>
-            <p>Documents are immutable; repeated observations are tracked independently.</p>
+            <p class="section-label">Sources</p>
+            <h2>Imported records</h2>
+            <p>Each import is saved separately so changes can be reviewed.</p>
           </div>
         </header>
         <div class="source-grid" id="sourceGrid"></div>
@@ -277,7 +276,7 @@
 
     <footer>
       <span>Trial Optimizer</span>
-      <p>Decision support for research teams. Not medical advice.</p>
+      <p>For research use. Not medical advice.</p>
     </footer>
 
     <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>

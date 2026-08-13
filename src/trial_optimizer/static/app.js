@@ -86,7 +86,7 @@ function renderOverview(data) {
             </div>`,
         )
         .join("")
-    : `<div class="empty-state"><strong>No trial statuses yet</strong><p>Ingest ClinicalTrials.gov records to populate this view.</p></div>`;
+    : `<div class="empty-state"><strong>No trial statuses yet</strong><p>Import ClinicalTrials.gov records to fill this view.</p></div>`;
 
   const filter = $("#statusFilter");
   const current = filter.value;
@@ -106,7 +106,7 @@ function renderOverview(data) {
             </div>`,
         )
         .join("")
-    : `<div class="empty-state"><strong>No accepted assessments</strong><p>Registry state remains separate until outcome evidence is reviewed.</p></div>`;
+    : `<div class="empty-state"><strong>No reviewed outcomes</strong><p>A registry status is not an outcome until the results are reviewed.</p></div>`;
 }
 
 function statusPill(value) {
@@ -162,7 +162,7 @@ function renderTrials(data) {
 function renderAnalogs(items) {
   const grid = $("#analogGrid");
   if (!items.length) {
-    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No analog links yet</strong><p>Import a Convoke export to begin comparing development programs.</p></div></div>`;
+    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No comparisons yet</strong><p>Import a Convoke export to compare development programs.</p></div></div>`;
     return;
   }
   grid.innerHTML = items
@@ -203,7 +203,7 @@ function sourceInitials(value) {
 function renderSources(items) {
   const grid = $("#sourceGrid");
   if (!items.length) {
-    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No source documents yet</strong><p>Ingest a registry or public-web record to populate provenance.</p></div></div>`;
+    grid.innerHTML = `<div class="panel"><div class="empty-state"><strong>No source documents yet</strong><p>Import a registry or public web record to add a source.</p></div></div>`;
     return;
   }
   grid.innerHTML = items
@@ -212,7 +212,7 @@ function renderSources(items) {
         <article class="source-card">
           <div class="source-card-top">
             <span class="source-avatar">${escapeHtml(sourceInitials(item.source_system))}</span>
-            <span class="source-tag">Connected</span>
+            <span class="source-tag">Imported</span>
           </div>
           <h3 title="${escapeHtml(item.source_system)}">${escapeHtml(humanize(item.source_system))}</h3>
           <p>Last observed ${escapeHtml(formatDate(item.last_observed_at))}</p>
@@ -237,7 +237,7 @@ function emptyEvidence(message) {
 
 function renderAssessedEvidence(items, kind) {
   if (!items?.length) {
-    return emptyEvidence(`No reviewed ${kind} assessments match the current evidence set.`);
+    return emptyEvidence(`No reviewed ${kind} assessments match these trials.`);
   }
   return items
     .map((item) => {
@@ -266,9 +266,9 @@ function renderAssessedEvidence(items, kind) {
 function renderContextEvidence(items, kind) {
   if (!items?.length) {
     const messages = {
-      active: "No currently active analog trials were found in the imported snapshots.",
-      completed: "No completed registry trials were found for this disease context.",
-      unassessed: "No additional unassessed registry context was found.",
+      active: "No active similar trials were found in the imported records.",
+      completed: "No completed registry trials were found for this disease.",
+      unassessed: "No additional trials without reviewed outcomes were found.",
     };
     return emptyEvidence(messages[kind] || "No matching context was found.");
   }
@@ -291,7 +291,7 @@ function renderContextEvidence(items, kind) {
 
 function renderInactivePrograms(items) {
   if (!items?.length) {
-    return emptyEvidence("No inactive, probable-inactive, or discontinued Convoke programs were found in the imported snapshots.");
+    return emptyEvidence("No inactive, probable-inactive, or discontinued Convoke programs were found in the imported records.");
   }
   return items
     .map((item) => {
@@ -351,14 +351,14 @@ function renderLLMSynthesis(llm) {
     return `
       <section class="llm-fallback">
         <span aria-hidden="true">✦</span>
-        <div><strong>AI evidence synthesis is not configured</strong><p>The deterministic benchmark and source citations remain available.</p></div>
+        <div><strong>AI review is off</strong><p>The rules-based comparison and source links are still available.</p></div>
       </section>`;
   }
   if (llm.status !== "enhanced" || !llm.output) {
     return `
       <section class="llm-fallback warning">
         <span aria-hidden="true">!</span>
-        <div><strong>AI synthesis fell back safely</strong><p>${escapeHtml(llm.message || "The deterministic benchmark remains available.")}</p></div>
+        <div><strong>AI review is unavailable</strong><p>${escapeHtml(llm.message || "The rules-based comparison is still available.")}</p></div>
       </section>`;
   }
 
@@ -384,8 +384,8 @@ function renderLLMSynthesis(llm) {
     <section class="llm-synthesis">
       <header class="llm-header">
         <div>
-          <p class="section-label">AI evidence synthesis</p>
-          <h4>Interpretation and design tradeoffs</h4>
+          <p class="section-label">AI review</p>
+          <h4>Summary and design questions</h4>
         </div>
         <div class="llm-meta">
           <span class="llm-confidence ${escapeHtml(output.confidence)}">${escapeHtml(humanize(output.confidence))} confidence</span>
@@ -395,25 +395,25 @@ function renderLLMSynthesis(llm) {
       <p class="llm-summary">${escapeHtml(output.executive_summary)}</p>
       <div class="llm-columns">
         <section>
-          <h5>Design assessment</h5>
+          <h5>Design review</h5>
           <div class="llm-claim-list">${renderLLMClaims(output.design_assessment, llm, "No additional design claims were supported.")}</div>
         </section>
         <section>
-          <h5>Failure readthrough</h5>
-          <div class="llm-claim-list">${renderLLMClaims(output.failure_readthrough, llm, "No reviewed failure evidence was available for readthrough.")}</div>
+          <h5>How failed trials may apply</h5>
+          <div class="llm-claim-list">${renderLLMClaims(output.failure_readthrough, llm, "No reviewed failed trials were available for comparison.")}</div>
         </section>
       </div>
       <div class="alternative-group">
-        <h5>Evidence-grounded alternatives</h5>
-        <div class="alternative-grid">${alternatives || `<div class="llm-empty">No evidence-grounded alternative was proposed.</div>`}</div>
+        <h5>Other design options</h5>
+        <div class="alternative-grid">${alternatives || `<div class="llm-empty">No other design supported by the sources was proposed.</div>`}</div>
       </div>
       <div class="llm-review-grid">
-        <section><h5>Evidence gaps</h5><ul>${gaps || "<li>No additional gap identified.</li>"}</ul></section>
-        <section><h5>Questions for expert review</h5><ul>${questions || "<li>No additional question generated.</li>"}</ul></section>
+        <section><h5>Missing information</h5><ul>${gaps || "<li>No additional missing information identified.</li>"}</ul></section>
+        <section><h5>Questions for reviewers</h5><ul>${questions || "<li>No additional question generated.</li>"}</ul></section>
       </div>
       <footer class="llm-footer">
-        <span>${llm.included_convoke_context ? "Convoke context included" : "Convoke context excluded from the model request"}</span>
-        <span>${llm.audit_status === "stored" ? "Audit record stored" : "Audit record unavailable"}</span>
+        <span>${llm.included_convoke_context ? "Convoke records used" : "Convoke records not sent to AI"}</span>
+        <span>${llm.audit_status === "stored" ? "Review saved" : "Review not saved"}</span>
       </footer>
     </section>`;
 }
@@ -443,7 +443,7 @@ function renderRecommendation(data) {
   $("#recommendationOutput").innerHTML = `
     <header class="recommendation-header">
       <div>
-        <p class="section-label">Recommended starting point</p>
+        <p class="section-label">Suggested design</p>
         <h3>${escapeHtml(recommendation.phase)} design for ${escapeHtml(data.request.drug)}</h3>
         <p>${escapeHtml(data.request.disease)} · generated ${escapeHtml(formatDate(data.generated_at))}</p>
       </div>
@@ -459,7 +459,7 @@ function renderRecommendation(data) {
     </div>
     <div class="recommendation-midgrid">
       <section class="sample-card">
-        <p class="section-label">Enrollment benchmark</p>
+        <p class="section-label">Enrollment in similar trials</p>
         <strong>${sample.median == null ? "Not available" : formatNumber(sample.median)}</strong>
         <span>median participants</span>
         <div>
@@ -470,36 +470,36 @@ function renderRecommendation(data) {
         <small>${escapeHtml(sample.caveat)}</small>
       </section>
       <section class="endpoint-card">
-        <p class="section-label">Primary endpoint candidates</p>
+        <p class="section-label">Possible primary endpoints</p>
         <ul>${endpointMarkup}</ul>
       </section>
     </div>
     <div class="recommendation-notes">
       <section>
-        <h4>Why this pattern</h4>
+        <h4>Why this design</h4>
         <ul>${(recommendation.rationale || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       </section>
       <section>
-        <h4>Risks to investigate</h4>
+        <h4>Questions to review</h4>
         <ul class="risk-list">${riskMarkup}</ul>
       </section>
     </div>
     ${renderLLMSynthesis(data.llm)}
     <section class="evidence-section">
-      <div class="evidence-heading"><div><p class="section-label">Cited analog evidence</p><h4>Reviewed outcomes</h4></div><span>Human-reviewed labels only</span></div>
+      <div class="evidence-heading"><div><p class="section-label">Related trials</p><h4>Reviewed outcomes</h4></div><span>Human-reviewed labels only</span></div>
       <div class="evidence-columns">
         <div><h4><i class="success-dot"></i> Successful or partial</h4><div class="evidence-stack">${renderAssessedEvidence(evidence.successful, "success")}</div></div>
         <div><h4><i class="failure-dot"></i> Failed</h4><div class="evidence-stack">${renderAssessedEvidence(evidence.failed, "failure")}</div></div>
       </div>
     </section>
     <section class="evidence-section context-section">
-      <div class="evidence-heading"><div><p class="section-label">Landscape context</p><h4>Current and historical programs</h4></div><span>Status is not outcome</span></div>
+      <div class="evidence-heading"><div><p class="section-label">Other related records</p><h4>Active, completed, and discontinued programs</h4></div><span>Status is not outcome</span></div>
       <div class="context-group"><h5>Active trials</h5><div class="context-grid">${renderContextEvidence(evidence.active, "active")}</div></div>
       <div class="context-group"><h5>Completed trials · outcome-neutral unless reviewed</h5><div class="context-grid">${renderContextEvidence(evidence.completed, "completed")}</div></div>
       <div class="context-group"><h5>Inactive or discontinued programs</h5><div class="context-grid">${renderInactivePrograms(evidence.inactive_programs)}</div></div>
-      <div class="context-group"><h5>Additional unassessed registry context</h5><div class="context-grid">${renderContextEvidence(evidence.unassessed_context, "unassessed")}</div></div>
+      <div class="context-group"><h5>Additional trials without reviewed outcomes</h5><div class="context-grid">${renderContextEvidence(evidence.unassessed_context, "unassessed")}</div></div>
     </section>
-    <div class="limitations"><strong>Use with expert review</strong><ul>${(data.limitations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+    <div class="limitations"><strong>Limits</strong><ul>${(data.limitations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
 }
 
 async function generateRecommendation(event) {
@@ -525,7 +525,7 @@ async function generateRecommendation(event) {
     renderRecommendation(data);
     $("#recommendationOutput").classList.remove("hidden");
   } catch (error) {
-    $("#recommendationOutput").innerHTML = `<div class="recommendation-error"><strong>Could not build the evidence brief</strong><p>${escapeHtml(error.message)}</p></div>`;
+    $("#recommendationOutput").innerHTML = `<div class="recommendation-error"><strong>Could not compare trial designs</strong><p>${escapeHtml(error.message)}</p></div>`;
     $("#recommendationOutput").classList.remove("hidden");
   } finally {
     $("#recommendationLoading").classList.add("hidden");

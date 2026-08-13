@@ -762,7 +762,7 @@ class PostgresDashboardStore:
             {
                 "category": category,
                 "count": count,
-                "message": f"{humanize_category(category)} appeared in {count} reviewed failed analog assessment{'s' if count != 1 else ''}.",
+                "message": f"{humanize_category(category)} appeared in {count} reviewed failed trial assessment{'s' if count != 1 else ''}.",
             }
             for category, count in causal_categories.most_common(5)
         ]
@@ -776,13 +776,13 @@ class PostgresDashboardStore:
 
         requested_phase = request.phase or "Phase 2"
         rationale = [
-            f"Benchmarked against {len(benchmark)} registered trial(s) in {request.disease}.",
-            f"The design pattern uses {len(successful)} reviewed successful and {len(failed)} reviewed failed analog trial(s).",
-            f"The current landscape adds {len(active_trials)} active trial record(s), {len(completed_trials)} completed trial record(s), and {len(inactive_programs)} inactive or discontinued program(s).",
+            f"Compared with {len(benchmark)} registered trial(s) in {request.disease}.",
+            f"The suggested design uses {len(successful)} reviewed successful and {len(failed)} reviewed failed similar trial(s).",
+            f"Related records include {len(active_trials)} active trial(s), {len(completed_trials)} completed trial(s), and {len(inactive_programs)} inactive or discontinued program(s).",
         ]
         if not successful or not failed:
             rationale.append(
-                "One side of the success/failure evidence set is missing; treat this as a design starting point, not a validated optimum."
+                "Successful or failed trial data is missing. Treat this design as a suggestion that requires review."
             )
 
         return {
@@ -812,7 +812,7 @@ class PostgresDashboardStore:
                     "lower_quartile": _percentile(enrollments, 0.25),
                     "upper_quartile": _percentile(enrollments, 0.75),
                     "trial_count": len(enrollments),
-                    "caveat": "Descriptive benchmark only; determine final enrollment with a prespecified statistical power calculation.",
+                    "caveat": "This only describes similar trials. Determine final enrollment with a prespecified statistical power calculation.",
                 },
                 "primary_endpoint_candidates": endpoint_candidates,
                 "rationale": rationale,
@@ -839,7 +839,7 @@ class PostgresDashboardStore:
                 ][:10],
             },
             "limitations": [
-                "This is a historical analog benchmark, not medical, regulatory, or statistical advice.",
+                "This compares historical trials. It is not medical, regulatory, or statistical advice.",
                 "A program marked active by Convoke may include linked trials that are already complete; displayed active trials are filtered by study completion date when available.",
                 "Only reviewed outcome assessments are labeled successful or failed. Registry completion alone is not success.",
             ],
@@ -956,7 +956,7 @@ def create_app(
         if enhancer is None:
             result["llm"] = {
                 "status": "disabled",
-                "message": "LLM synthesis is not configured; the deterministic benchmark is still available.",
+                "message": "AI review is off. The rules-based comparison is still available.",
             }
             return result
 
@@ -978,7 +978,7 @@ def create_app(
                 "output": None,
                 "usage": {},
                 "error_category": type(error).__name__,
-                "message": "The LLM synthesis was unavailable; the deterministic benchmark remains valid.",
+                "message": "AI review was unavailable. The rules-based comparison is still available.",
             }
         result["llm"] = llm_result
 
