@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -58,7 +59,24 @@ class FakeStore:
         }
 
 
-client = TestClient(create_app(FakeStore()))
+class FakeClinicalTrialsClient:
+    def get_study(self, nct_id: str) -> dict[str, Any]:
+        if nct_id != "NCT00000001":
+            raise ValueError(f"Invalid NCT ID: {nct_id}")
+        return {
+            "protocolSection": {
+                "identificationModule": {
+                    "nctId": nct_id,
+                    "briefTitle": "Example registry study",
+                }
+            },
+            "hasResults": False,
+        }
+
+
+client = TestClient(
+    create_app(FakeStore(), clinical_trials_client=FakeClinicalTrialsClient())
+)
 
 
 def test_dashboard_and_health() -> None:
@@ -78,6 +96,13 @@ def test_dashboard_api_and_not_found() -> None:
     assert client.get("/api/trials/NCT99999999").status_code == 404
 
 
+def test_clinical_trials_proxy_contract() -> None:
+    response = client.get("/api/clinicaltrials/NCT00000001")
+    assert response.status_code == 200
+    assert response.json()["protocolSection"]["identificationModule"]["nctId"] == "NCT00000001"
+    assert client.get("/api/clinicaltrials/not-an-nct-id").status_code == 422
+
+
 def test_recommendation_api_accepts_program_brief() -> None:
     response = client.post(
         "/api/recommendations",
@@ -90,3 +115,22 @@ def test_recommendation_api_accepts_program_brief() -> None:
 
 def test_recommendation_api_validates_required_fields() -> None:
     assert client.post("/api/recommendations", json={"drug": "A"}).status_code == 422
+
+
+def test_review_routes_serve_a_built_spa(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (tmp_path / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    (assets / "app.js").write_text("export {}", encoding="utf-8")
+
+    review_client = TestClient(
+        create_app(
+            FakeStore(),
+            clinical_trials_client=FakeClinicalTrialsClient(),
+            frontend_dist=tmp_path,
+        )
+    )
+
+    assert 'id="root"' in review_client.get("/review/").text
+    assert 'id="root"' in review_client.get("/review/evidence").text
+    assert review_client.get("/review/assets/app.js").status_code == 200

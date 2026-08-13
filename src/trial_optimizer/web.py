@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
 
 import psycopg
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from trial_optimizer.clients.clinical_trials_gov import ClinicalTrialsGovClient
 from trial_optimizer.llm import (
     CitationValidationError,
     RecommendationEnhancer,
@@ -28,6 +30,7 @@ from trial_optimizer.normalization import normalize_name
 
 DEFAULT_DATABASE_URL = "postgresql://trialopt:trialopt@localhost:5432/trialopt"
 STATIC_DIR = Path(__file__).with_name("static")
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 load_dotenv()
 ACTIVE_STATUSES = (
     "RECRUITING",
@@ -893,12 +896,24 @@ class PostgresDashboardStore:
 def create_app(
     store: DashboardStore | None = None,
     enhancer: RecommendationEnhancer | None = None,
+    clinical_trials_client: ClinicalTrialsGovClient | None = None,
+    frontend_dist: Path | None = None,
 ) -> FastAPI:
     data_store = store or PostgresDashboardStore()
+    registry_client = clinical_trials_client or ClinicalTrialsGovClient()
+    review_dist = frontend_dist or FRONTEND_DIST
     api = FastAPI(title="Trial Optimizer", version="0.1.0")
     api.state.store = data_store
     api.state.enhancer = enhancer
+    api.state.clinical_trials_client = registry_client
+    api.state.frontend_dist = review_dist
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    if (review_dist / "assets").is_dir():
+        api.mount(
+            "/review/assets",
+            StaticFiles(directory=review_dist / "assets"),
+            name="review-assets",
+        )
 
     def run_query(method_name: str, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -913,6 +928,24 @@ def create_app(
     @api.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    def review_file() -> FileResponse:
+        index_file = review_dist / "index.html"
+        if not index_file.is_file():
+            raise HTTPException(
+                status_code=503,
+                detail="The protocol reviewer has not been built. Run `npm ci` and `npm run build` in frontend/.",
+            )
+        return FileResponse(index_file)
+
+    @api.get("/review", include_in_schema=False)
+    @api.get("/review/", include_in_schema=False)
+    def review_index() -> FileResponse:
+        return review_file()
+
+    @api.get("/review/{_path:path}", include_in_schema=False)
+    def review_spa(_path: str) -> FileResponse:
+        return review_file()
 
     @api.get("/health")
     def health() -> dict[str, Any]:
@@ -941,6 +974,25 @@ def create_app(
         if result is None:
             raise HTTPException(status_code=404, detail="Trial not found")
         return result
+
+    @api.get("/api/clinicaltrials/{nct_id}")
+    def clinical_trial(nct_id: str) -> dict[str, Any]:
+        try:
+            return registry_client.get_study(nct_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except HTTPError as error:
+            if error.code == 404:
+                raise HTTPException(status_code=404, detail="Trial not found") from error
+            raise HTTPException(
+                status_code=502,
+                detail="ClinicalTrials.gov returned an upstream error.",
+            ) from error
+        except (URLError, TimeoutError) as error:
+            raise HTTPException(
+                status_code=502,
+                detail="ClinicalTrials.gov is temporarily unavailable.",
+            ) from error
 
     @api.get("/api/analogs")
     def analogs(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
